@@ -1,0 +1,10 @@
+[package]
+name = "nesm"
+version = "0.1.0"
+authors = ["matt"]
+edition = "2018"
+
+# See more keys and their definitions at https://doc.rust-lang.org/cargo/reference/manifest.html
+
+[dependencies]
+static_assertions = "0.2.3"
