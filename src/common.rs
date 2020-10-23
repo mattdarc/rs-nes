@@ -51,6 +51,13 @@ macro_rules! ternary {
 }
 
 #[macro_export]
+macro_rules! set_status {
+    ($($v:expr),*) => {
+	(0 $(| (1 << $v))*).into()
+    }
+}
+
+#[macro_export]
 macro_rules! bit_set {
     ($value:expr, $bit:expr) => {
         ($value & (1 << $bit)) != 0

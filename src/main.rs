@@ -1,19 +1,29 @@
-#[macro_use] extern crate static_assertions;
-#[macro_use] mod common;
+#[macro_use]
+extern crate static_assertions;
+#[macro_use]
+mod common;
 
-mod cpu;
-mod instructions;
-mod memory;
-mod mapper;
+mod apu;
 mod cartridge;
 mod controller;
+mod cpu;
+mod instructions;
+mod mapper;
+mod memory;
 mod ppu;
-mod apu;
 
+use cartridge::*;
 use cpu::*;
 
 fn main() {
     const_assert!(0 == 0);
-    let mut proc = Ricoh2A03::new();
-    proc.run();
+    match Cartridge::load("../roms/Tetris.nes") {
+        Ok(cart) => {
+            let mut proc = Ricoh2A03::with(cart);
+            proc.init();
+            proc.run();
+            proc.exit();
+        }
+        Err(e) => unreachable!("{}", e),
+    }
 }

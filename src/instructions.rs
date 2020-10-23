@@ -255,15 +255,15 @@ const fn create_opcode_table() -> [Instruction; 256] {
 
     create_instr!(0xA2; LDX, Immediate, 2);
     create_instr!(0xA6; LDX, ZeroPage, 3);
-    create_instr!(0xB6; LDX, ZeroPageX, 4);
+    create_instr!(0xB6; LDX, ZeroPageY, 4);
     create_instr!(0xAE; LDX, Absolute, 4);
-    create_instr!(0xBE; LDX, AbsoluteX, 4);
+    create_instr!(0xBE; LDX, AbsoluteY, 4);
 
     create_instr!(0xA0; LDY, Immediate, 2);
     create_instr!(0xA4; LDY, ZeroPage, 3);
     create_instr!(0xB4; LDY, ZeroPageX, 4);
-    create_instr!(0xAE; LDY, Absolute, 4);
-    create_instr!(0xBE; LDY, AbsoluteX, 4);
+    create_instr!(0xAC; LDY, Absolute, 4);
+    create_instr!(0xBC; LDY, AbsoluteX, 4);
 
     create_instr!(0x4A; LSR, Accumulator, 2);
     create_instr!(0x46; LSR, ZeroPage, 5);

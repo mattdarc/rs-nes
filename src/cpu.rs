@@ -25,20 +25,21 @@ use crate::instructions::*;
 use crate::memory::*;
 use crate::ppu::*;
 
-#[derive(Copy, Debug, Clone)]
-struct Status {
+#[derive(Copy, Debug, Clone, PartialEq)]
+pub struct Status {
     flags: u8,
 }
 
 impl Status {
-    const NEGATIVE: u8 = 5;
-    const ZERO: u8 = 4;
-    const CARRY: u8 = 3;
-    const IRQ: u8 = 2;
-    const DECIMAL: u8 = 1;
-    const OVERFLOW: u8 = 0;
+    pub const NEGATIVE: u8 = 5;
+    pub const ZERO: u8 = 4;
+    pub const CARRY: u8 = 3;
+    pub const IRQ: u8 = 2;
+    pub const DECIMAL: u8 = 1;
+    pub const OVERFLOW: u8 = 0;
 
     fn set(&mut self, bit: bool, idx: u8) {
+	println!("-- Updating bit {}", idx);
         self.flags = (self.flags & !(1 << idx)) | ((bit as u8) << idx);
     }
 
@@ -138,7 +139,6 @@ impl Ricoh2A03 {
         while !self.done() {
             self.clock();
         }
-        self.exit();
         self.status.into()
     }
 
@@ -148,11 +148,10 @@ impl Ricoh2A03 {
             self.clock();
             count += 1;
         }
-        self.exit();
         self.status.into()
     }
 
-    fn exit(&mut self) {
+    pub fn exit(&mut self) {
         self.status = Status::from(0);
     }
 
@@ -191,6 +190,7 @@ impl Ricoh2A03 {
     }
 
     fn write(&mut self, addr: usize, val: u8) {
+	println!("$$ Writing {:#X} to RAM {:#X}", val, addr);
         match addr {
             0..=0x1FFF => self.ram.write(addr % 0x800, val),
             0x2000..=0x3FFF => self.ppu.write(addr, val),
@@ -240,6 +240,7 @@ impl Ricoh2A03 {
             }
             Indirect => {
                 let addr = self.read16(ptr) as usize;
+		println!("-- Indirect address {:#X}", addr);
                 self.read16(addr)
             }
             IndirectX => {
@@ -442,6 +443,7 @@ impl Ricoh2A03 {
     // BIT
     fn test_bits(&mut self, mode: &AddressingMode) {
         let operand = self.read_mem(mode);
+	println!("-- Test bits {} & {}", operand, self.acc);
         self.status.set(bit_set!(operand, 6), Status::OVERFLOW);
         self.status.set(is_negative(operand), Status::NEGATIVE);
         self.status.set((self.acc & operand) == 0, Status::ZERO);
@@ -477,43 +479,43 @@ impl Ricoh2A03 {
     // CMP
     fn cmp_with_acc(&mut self, mode: &AddressingMode) {
         let operand = self.read_mem(mode);
-        let (result, over) = (self.acc).overflowing_sub(operand);
-        self.status.set(over, Status::OVERFLOW);
+        let (result, carry) = self.acc.overflowing_sub(operand);
+        self.status.set(carry, Status::CARRY);
         self.update_flags(result);
     }
 
     // CPX
     fn cmp_with_x(&mut self, mode: &AddressingMode) {
         let operand = self.read_mem(mode);
-        let (result, over) = (self.x).overflowing_sub(operand);
-        self.status.set(over, Status::OVERFLOW);
+        let (result, carry) = self.x.overflowing_sub(operand);
+        self.status.set(carry, Status::CARRY);
         self.update_flags(result);
     }
 
     // CPY
     fn cmp_with_y(&mut self, mode: &AddressingMode) {
         let operand = self.read_mem(mode);
-        let (result, over) = (self.y).overflowing_sub(operand);
-        self.status.set(over, Status::OVERFLOW);
+        let (result, carry) = self.y.overflowing_sub(operand);
+        self.status.set(carry, Status::CARRY);
         self.update_flags(result);
     }
 
     // DEC
     fn dec_mem(&mut self, mode: &AddressingMode) {
-        let val = self.read_mem(mode);
-        self.write_mem(mode, val - 1);
+        let val = self.read_mem(mode).wrapping_sub(1);
+        self.write_mem(mode, val);
         self.update_flags(val);
     }
 
     // DEX
     fn dec_x(&mut self) {
-        self.x -= 1;
+        self.x = self.x.wrapping_sub(1);
         self.update_flags(self.x);
     }
 
     // DEY
     fn dec_y(&mut self) {
-        self.y -= 1;
+        self.y = self.y.wrapping_sub(1);
         self.update_flags(self.y);
     }
 
@@ -526,26 +528,27 @@ impl Ricoh2A03 {
 
     // INC
     fn inc_mem(&mut self, mode: &AddressingMode) {
-        let val = self.read_mem(mode);
-        self.write_mem(mode, val + 1);
+        let val = self.read_mem(mode).wrapping_add(1);
+        self.write_mem(mode, val);
         self.update_flags(val);
     }
 
     // INX
     fn inc_x(&mut self) {
-        self.x += 1;
+        self.x = self.x.wrapping_add(1);
         self.update_flags(self.x);
     }
 
     // INY
     fn inc_y(&mut self) {
-        self.y += 1;
+        self.y = self.y.wrapping_add(1);
         self.update_flags(self.y);
     }
 
     // JMP
     fn jump_to(&mut self, mode: &AddressingMode) {
         let addr = self.get_addr(mode) as usize;
+        println!("-- PC Destination from {:#X}", addr);
         self.pc = self.read16(addr);
         println!("-- Jump to {}", self.pc);
     }
@@ -623,17 +626,21 @@ impl Ricoh2A03 {
     // ROL
     fn rotate_left(&mut self, mode: &AddressingMode) {
         let carry = self.status.get(Status::CARRY);
-        self.shift_left(mode);
-        let val = self.read_mem(mode) | carry as u8;
+	let mem = self.read_mem(mode);
+        self.status.set((mem & 0x80) != 0, Status::CARRY);
+        let val = (mem << 1) | (carry as u8);
         self.write_mem(mode, val);
+        self.update_flags(val);
     }
 
     // ROR
     fn rotate_right(&mut self, mode: &AddressingMode) {
         let carry = self.status.get(Status::CARRY);
-        self.shift_right(mode);
-        let val = self.read_mem(mode) | (carry as u8) << 7;
+	let mem = self.read_mem(mode);
+        self.status.set((mem & 0x01) != 0, Status::CARRY);
+        let val = (mem >> 1) | ((carry as u8) << 7);
         self.write_mem(mode, val);
+        self.update_flags(val);
     }
 
     // RTI
@@ -705,7 +712,7 @@ impl Ricoh2A03 {
 
     // TSX
     fn tx_sp_to_x(&mut self) {
-        self.x = self.peek();
+        self.x = self.sp;
         self.update_flags(self.x);
     }
 
@@ -717,7 +724,8 @@ impl Ricoh2A03 {
 
     // TXS
     fn tx_x_to_sp(&mut self) {
-        self.poke(self.x);
+        self.sp = self.x;
+
     }
 
     // TYA
@@ -756,7 +764,7 @@ impl Clocked for Ricoh2A03 {
         );
         self.incr_pc(1);
 
-        match &instr.name() {
+        match instr.name() {
             // BRANCHES
             BPL => self.branch_if_pos(&instr.mode()),
             BMI => self.branch_if_neg(&instr.mode()),
@@ -824,17 +832,17 @@ impl Clocked for Ricoh2A03 {
             }
         }
 
-        match &instr.mode() {
-            ZeroPage => self.incr_pc(1),
-            ZeroPageX => self.incr_pc(1),
-            ZeroPageY => self.incr_pc(1),
-            Absolute => self.incr_pc(2),
-            AbsoluteX => self.incr_pc(2),
-            AbsoluteY => self.incr_pc(2),
-            Indirect => self.incr_pc(2),
-            IndirectX => self.incr_pc(1),
-            IndirectY => self.incr_pc(1),
-            Immediate | Relative => self.incr_pc(1),
+        match instr.mode() {
+	    ZeroPage => self.incr_pc(1),
+	    ZeroPageX => self.incr_pc(1),
+	    ZeroPageY => self.incr_pc(1),
+	    Absolute => self.incr_pc(2),
+	    AbsoluteX => self.incr_pc(2),
+	    AbsoluteY => self.incr_pc(2),
+	    Indirect => self.incr_pc(2),
+	    IndirectX => self.incr_pc(1),
+	    IndirectY => self.incr_pc(1),
+	    Immediate | Relative => self.incr_pc(1),
 	    Accumulator | Invalid => {}
         }
         // todo!("Need to clock everything timed by the CPU clock, but not execute instructions until the previous is fully processed");
