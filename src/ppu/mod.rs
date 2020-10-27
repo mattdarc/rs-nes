@@ -3,6 +3,8 @@
 mod nametable;
 mod sdl_interface;
 
+pub use sdl_interface::SDL2Intrf as Renderer; 
+
 use crate::cartridge::*;
 use crate::common::*;
 use crate::memory::*;
@@ -12,10 +14,11 @@ pub const PPU_NUM_FRAMES: usize = 256;
 pub const PPU_NUM_SCANLINES: usize = 0;
 
 #[derive(Clone)]
-pub struct PPU {
+pub struct PPU<'a> {
     vram: RAM,
     registers: [u8; 8],
-    sdl: SDL2Intrf,
+    renderer: SDL2Intrf,
+    cartridge: Option<&'a Cartridge>,
 }
 
 #[derive(Copy, Clone, Debug)]
@@ -32,24 +35,22 @@ enum EXTPins {
 
 struct Scroll(u32, u32);
 
-impl PPU {
+impl<'a> PPU<'a> {
     const PPUCTRL: usize = 0;
     const PPUMASK: usize = 1;
     const PPUSTATUS: usize = 2;
 
-    pub fn new() -> PPU {
+    pub fn new() -> PPU<'a> {
         PPU {
             vram: RAM::new(PPU_NUM_FRAMES * PPU_NUM_SCANLINES),
             registers: [0; 8],
-            sdl: SDL2Intrf::new(),
+            renderer: SDL2Intrf::new(),
+            cartridge: None,
         }
     }
 
-    pub fn init(
-        &mut self,
-        cartridge: &Cartridge,
-    ) -> Result<(), Box<dyn std::error::Error>> {
-        self.sdl.init(cartridge)
+    pub fn init(&mut self, cartridge: &'a Cartridge) -> Result<(), Box<dyn std::error::Error>> {
+        self.renderer.init(&cartridge.get_name())
     }
 
     fn base_nametable_addr(&self) -> usize {
@@ -145,20 +146,20 @@ impl PPU {
     }
 }
 
-impl Writeable for PPU {
+impl Writeable for PPU<'_> {
     fn write(&mut self, addr: usize, val: u8) {
-	let num_regs = self.registers.len();
+        let num_regs = self.registers.len();
         self.registers[(addr - 0x2000) % num_regs] = val;
     }
 }
 
-impl Readable for PPU {
+impl Readable for PPU<'_> {
     fn read(&self, addr: usize) -> u8 {
-	let num_regs = self.registers.len();
+        let num_regs = self.registers.len();
         self.registers[(addr - 0x2000) % num_regs]
     }
 }
 
-impl Clocked for PPU {
+impl Clocked for PPU<'_> {
     fn clock(&mut self) {}
 }

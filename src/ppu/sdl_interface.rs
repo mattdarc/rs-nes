@@ -3,8 +3,6 @@ use sdl2::keyboard::Keycode;
 use sdl2::pixels::Color;
 use std::time::Duration;
 
-use crate::cartridge::*;
-
 #[derive(Debug, Clone)]
 pub struct SDL2Intrf {}
 
@@ -13,16 +11,12 @@ impl SDL2Intrf {
         SDL2Intrf {}
     }
 
-    pub fn init(
-        &mut self,
-        cartridge: &Cartridge,
-    ) -> Result<(), Box<dyn std::error::Error>> {
-
+    pub fn init(&mut self, name: &str) -> Result<(), Box<dyn std::error::Error>> {
         let sdl_context = sdl2::init()?;
         let video_subsystem = sdl_context.video()?;
 
         let window = video_subsystem
-            .window(&cartridge.get_name(), 800, 600)
+            .window(name, 800, 600)
             .position_centered()
             .build()?;
 

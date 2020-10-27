@@ -212,7 +212,6 @@ name = "rs-nes"
 version = "0.1.0"
 dependencies = [
  "sdl2",
- "static_assertions",
 ]
 
 [[package]]
@@ -238,12 +237,6 @@ dependencies = [
  "cfg-if",
  "libc",
 ]
-
-[[package]]
-name = "static_assertions"
-version = "0.2.5"
-source = "registry+https://github.com/rust-lang/crates.io-index"
-checksum = "c19be23126415861cb3a23e501d34a708f7f9b2183c5252d690941c2e69199d5"
 
 [[package]]
 name = "winapi"

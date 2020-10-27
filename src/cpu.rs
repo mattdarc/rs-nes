@@ -39,7 +39,7 @@ impl Status {
     pub const OVERFLOW: u8 = 0;
 
     fn set(&mut self, bit: bool, idx: u8) {
-	println!("-- Updating bit {}", idx);
+        println!("-- Updating bit {}", idx);
         self.flags = (self.flags & !(1 << idx)) | ((bit as u8) << idx);
     }
 
@@ -80,7 +80,7 @@ pub struct Ricoh2A03<'a> {
 
     // Memory
     ram: RAM,
-    ppu: PPU,
+    ppu: PPU<'a>,
     apu: APU,
     controller_1: Controller,
     controller_2: Controller,
@@ -124,8 +124,8 @@ impl<'a> Ricoh2A03<'a> {
             controller_1: Controller::default(),
             controller_2: Controller::default(),
         };
-	cpu.ppu.init(&cartridge);
-	cpu
+        cpu.ppu.init(&cartridge);
+        cpu
     }
 
     pub fn new() -> Ricoh2A03<'a> {
@@ -149,8 +149,12 @@ impl<'a> Ricoh2A03<'a> {
         }
     }
 
-    pub fn insert(&mut self, cartridge: &'a Cartridge) {
-	self.cartridge = Some(cartridge);
+    pub fn insert(
+        &mut self,
+        cartridge: &'a Cartridge,
+    ) -> Result<(), Box<dyn std::error::Error>> {
+        self.cartridge = Some(cartridge);
+        self.ppu.init(cartridge)
     }
 }
 
@@ -178,7 +182,7 @@ impl Ricoh2A03<'_> {
 
     pub fn exit(&mut self) {
         self.status = Status::from(0);
-	self.cartridge = None;
+        self.cartridge = None;
     }
 
     fn done(&self) -> bool {
@@ -216,7 +220,7 @@ impl Ricoh2A03<'_> {
     }
 
     fn write(&mut self, addr: usize, val: u8) {
-	println!("$$ Writing {:#X} to RAM {:#X}", val, addr);
+        println!("$$ Writing {:#X} to RAM {:#X}", val, addr);
         match addr {
             0..=0x1FFF => self.ram.write(addr % 0x800, val),
             0x2000..=0x3FFF => self.ppu.write(addr, val),
@@ -266,7 +270,7 @@ impl Ricoh2A03<'_> {
             }
             Indirect => {
                 let addr = self.read16(ptr) as usize;
-		println!("-- Indirect address {:#X}", addr);
+                println!("-- Indirect address {:#X}", addr);
                 self.read16(addr)
             }
             IndirectX => {
@@ -310,9 +314,7 @@ impl Ricoh2A03<'_> {
                 self.read(addr)
             }
             Accumulator => self.acc,
-            Immediate | Relative => {
-                self.read(self.pc as usize)
-            }
+            Immediate | Relative => self.read(self.pc as usize),
             Invalid => unreachable!("Invalid AddressingMode"),
         }
     }
@@ -469,7 +471,7 @@ impl Ricoh2A03<'_> {
     // BIT
     fn test_bits(&mut self, mode: &AddressingMode) {
         let operand = self.read_mem(mode);
-	println!("-- Test bits {} & {}", operand, self.acc);
+        println!("-- Test bits {} & {}", operand, self.acc);
         self.status.set(bit_set!(operand, 6), Status::OVERFLOW);
         self.status.set(is_negative(operand), Status::NEGATIVE);
         self.status.set((self.acc & operand) == 0, Status::ZERO);
@@ -652,7 +654,7 @@ impl Ricoh2A03<'_> {
     // ROL
     fn rotate_left(&mut self, mode: &AddressingMode) {
         let carry = self.status.get(Status::CARRY);
-	let mem = self.read_mem(mode);
+        let mem = self.read_mem(mode);
         self.status.set((mem & 0x80) != 0, Status::CARRY);
         let val = (mem << 1) | (carry as u8);
         self.write_mem(mode, val);
@@ -662,7 +664,7 @@ impl Ricoh2A03<'_> {
     // ROR
     fn rotate_right(&mut self, mode: &AddressingMode) {
         let carry = self.status.get(Status::CARRY);
-	let mem = self.read_mem(mode);
+        let mem = self.read_mem(mode);
         self.status.set((mem & 0x01) != 0, Status::CARRY);
         let val = (mem >> 1) | ((carry as u8) << 7);
         self.write_mem(mode, val);
@@ -751,7 +753,6 @@ impl Ricoh2A03<'_> {
     // TXS
     fn tx_x_to_sp(&mut self) {
         self.sp = self.x;
-
     }
 
     // TYA
@@ -859,17 +860,17 @@ impl Clocked for Ricoh2A03<'_> {
         }
 
         match instr.mode() {
-	    ZeroPage => self.incr_pc(1),
-	    ZeroPageX => self.incr_pc(1),
-	    ZeroPageY => self.incr_pc(1),
-	    Absolute => self.incr_pc(2),
-	    AbsoluteX => self.incr_pc(2),
-	    AbsoluteY => self.incr_pc(2),
-	    Indirect => self.incr_pc(2),
-	    IndirectX => self.incr_pc(1),
-	    IndirectY => self.incr_pc(1),
-	    Immediate | Relative => self.incr_pc(1),
-	    Accumulator | Invalid => {}
+            ZeroPage => self.incr_pc(1),
+            ZeroPageX => self.incr_pc(1),
+            ZeroPageY => self.incr_pc(1),
+            Absolute => self.incr_pc(2),
+            AbsoluteX => self.incr_pc(2),
+            AbsoluteY => self.incr_pc(2),
+            Indirect => self.incr_pc(2),
+            IndirectX => self.incr_pc(1),
+            IndirectY => self.incr_pc(1),
+            Immediate | Relative => self.incr_pc(1),
+            Accumulator | Invalid => {}
         }
         // todo!("Need to clock everything timed by the CPU clock, but not execute instructions until the previous is fully processed");
     }
