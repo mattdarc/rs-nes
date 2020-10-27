@@ -1,14 +1,9 @@
 #[allow(unused_mut)]
+use std::cell::RefCell;
 
 use crate::cpu::*;
 use crate::instructions::AddressingMode::*;
 use crate::instructions::InstrName::*;
-
-impl Ricoh2A03 {
-    pub fn test_program(rom: &[u8]) -> Ricoh2A03 {
-        Ricoh2A03::with(crate::cartridge::test::program(rom))
-    }
-}
 
 fn bytes(instr: &Instruction) -> u16 {
     use AddressingMode::*;
@@ -25,7 +20,7 @@ fn bytes(instr: &Instruction) -> u16 {
         Relative => 2,    // 2 byte
         Accumulator => 1, // 1 byte
         Immediate => 2,   // 2 byte
-        Invalid => 1, // bytes that have no mode are implicitly 1
+        Invalid => 1,     // bytes that have no mode are implicitly 1
     }
 }
 
@@ -40,7 +35,8 @@ macro_rules! verify_op {
 	assert_eq!(act_instr.mode(), &$addr_mode, "Address mode mismatch for {:?}", &$addr_mode);
 
 	// Set up initial CPU state
-	let mut cpu = Ricoh2A03::test_program(&[$opcode, $($b,)*]);
+	let cartridge = RefCell::new(crate::cartridge::test::program(&[$opcode, $($b,)*]));
+	let mut cpu = Ricoh2A03::with(&cartridge);
 	$(cpu.$reg = $pv;)*
 	$(cpu.write($addr, $val);)*
 
@@ -74,7 +70,8 @@ macro_rules! verify_branch {
 	assert_eq!(act_instr.mode(), &$addr_mode, "Address mode mismatch for {:?}", &$addr_mode);
 
 	// Set up initial CPU state
-	let mut cpu = Ricoh2A03::test_program(&[$opcode, $($b,)*]);
+	let cartridge = RefCell::new(crate::cartridge::test::program(&[$opcode, $($b,)*]));
+	let mut cpu = Ricoh2A03::with(&cartridge);
 	$(cpu.$reg = $pv;)*
 	$(cpu.write($addr, $val);)*
 
@@ -437,14 +434,10 @@ macro_rules! test_rom {
     ($name:ident => $rom:literal) => {
         #[test]
         fn $name() {
-            let cart = match Cartridge::load($rom) {
-                Ok(cart) => cart,
-                Err(e) => unreachable!(
-                    "Error with \"{:?}\": {:?}",
-                    $rom, e
-                ),
-            };
-            let mut cpu = Ricoh2A03::with(cart);
+            let cart = Cartridge::load($rom).unwrap_or_else(|e| {
+                unreachable!("Error with \"{:?}\": {:?}", $rom, e)
+            });
+            let mut cpu = Ricoh2A03::with(&cart);
             cpu.init();
             cpu.run_for(10_000);
             assert_eq!(cpu.cycle, 10_000);

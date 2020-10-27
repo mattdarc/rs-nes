@@ -1,20 +1,30 @@
 use crate::mapper::*;
 use std::io::Read;
+use std::cell::RefCell;
+
+pub type Cartridge = RefCell<CartridgeImpl>;
+
+pub trait CartridgeInterface {
+    fn get_name(&self) -> String;
+    fn load(filename: &str) -> Result<Cartridge, std::io::Error>;
+    fn prg_read(&self, addr: usize) -> u8;
+    fn prg_write(&self, addr: usize, val: u8);
+}
 
 #[derive(Debug, Default, Clone)]
-pub struct Cartridge {
+pub struct CartridgeImpl {
     name: String,
 
     // This may not need to be a box - we can instantiate a new type for each mapper fine
     mapper: Box<dyn Mapper>,
 }
 
-impl Cartridge {
-    pub fn get_name(&self) -> &str {
-        &self.name
+impl CartridgeInterface for Cartridge {
+    fn get_name(&self) -> String {
+        self.borrow().name.to_owned()
     }
 
-    pub fn load(filename: &str) -> Result<Cartridge, std::io::Error> {
+    fn load(filename: &str) -> Result<Cartridge, std::io::Error> {
         let mut fh = std::fs::File::open(filename)?;
         let mut header: [u8; 16] = [0; 16];
         fh.read_exact(&mut header)?;
@@ -25,18 +35,18 @@ impl Cartridge {
         fh.read_exact(&mut data)?;
 
         let mapper = create_mapper(&header, &data);
-        Ok(Cartridge {
+        Ok(RefCell::new(CartridgeImpl {
             name: filename.to_owned(),
             mapper,
-        })
+        }))
     }
 
-    pub fn mapper(&self) -> &Box<dyn Mapper> {
-        &self.mapper
+    fn prg_read(&self, addr: usize) -> u8 {
+        self.borrow().mapper.prg_read(addr)
     }
 
-    pub fn mapper_mut(&mut self) -> &mut Box<dyn Mapper> {
-        &mut self.mapper
+    fn prg_write(&self, addr: usize, val: u8) {
+        self.borrow_mut().mapper.prg_write(addr, val);
     }
 }
 
@@ -45,8 +55,8 @@ pub mod test {
     use super::*;
     use crate::mapper::test;
 
-    pub fn program(data: &[u8]) -> Cartridge {
-        Cartridge {
+    pub fn program(data: &[u8]) -> CartridgeImpl {
+        CartridgeImpl {
 	    name: String::default(),
 	    mapper: test::mapper_with(data),
         }
@@ -75,8 +85,8 @@ mod tests {
             Ok(cart) => cart,
             Err(e) => unreachable!("Error {:?}", e),
         };
-        assert!(cart.mapper.prg_size() > 0);
-        assert!(cart.mapper.chr_size() > 0);
+        assert!(cart.borrow().mapper.prg_size() > 0);
+        assert!(cart.borrow().mapper.chr_size() > 0);
         assert_eq!(cart.get_name(), exp_name);
     }
 }

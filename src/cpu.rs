@@ -66,7 +66,7 @@ impl std::convert::From<u8> for Status {
 }
 
 #[derive(Clone)]
-pub struct Ricoh2A03 {
+pub struct Ricoh2A03<'a> {
     // CPU State
     pc: u16,
     acc: u8,
@@ -84,7 +84,7 @@ pub struct Ricoh2A03 {
     apu: APU,
     controller_1: Controller,
     controller_2: Controller,
-    cartridge: Cartridge,
+    cartridge: Option<&'a Cartridge>,
 }
 
 #[inline]
@@ -102,10 +102,33 @@ fn crosses_page(src: u16, dst: u16) -> bool {
     crosses
 }
 
-impl Ricoh2A03 {
+impl<'a> Ricoh2A03<'a> {
     const STACK_BEGIN: u16 = 0x0100;
 
-    pub fn with(cartridge: Cartridge) -> Ricoh2A03 {
+    pub fn with(cartridge: &'a Cartridge) -> Ricoh2A03<'a> {
+        let mut cpu = Ricoh2A03 {
+            pc: 0,
+            acc: 0,
+            x: 0,
+            y: 0,
+            sp: 0,
+            status: Status::from(0),
+
+            cycle: 0,
+            noop_cycles: 0,
+
+            ram: RAM::new(0x800),
+            cartridge: Some(cartridge),
+            ppu: PPU::new(),
+            apu: APU::default(),
+            controller_1: Controller::default(),
+            controller_2: Controller::default(),
+        };
+	cpu.ppu.init(&cartridge);
+	cpu
+    }
+
+    pub fn new() -> Ricoh2A03<'a> {
         Ricoh2A03 {
             pc: 0,
             acc: 0,
@@ -117,19 +140,21 @@ impl Ricoh2A03 {
             cycle: 0,
             noop_cycles: 0,
 
-            ram: RAM::new(2048),
-            ppu: PPU::default(),
+            ram: RAM::new(0x800),
+            ppu: PPU::new(),
             apu: APU::default(),
             controller_1: Controller::default(),
             controller_2: Controller::default(),
-            cartridge,
+            cartridge: None,
         }
     }
 
-    pub fn new() -> Ricoh2A03 {
-        Ricoh2A03::with(Cartridge::default())
+    pub fn insert(&mut self, cartridge: &'a Cartridge) {
+	self.cartridge = Some(cartridge);
     }
+}
 
+impl Ricoh2A03<'_> {
     pub fn init(&mut self) {
         println!("-- INITIALIZING");
         self.reset();
@@ -153,6 +178,7 @@ impl Ricoh2A03 {
 
     pub fn exit(&mut self) {
         self.status = Status::from(0);
+	self.cartridge = None;
     }
 
     fn done(&self) -> bool {
@@ -167,11 +193,11 @@ impl Ricoh2A03 {
     fn read(&self, addr: usize) -> u8 {
         let val = match addr {
             0..=0x1FFF => self.ram.read(addr % 0x800), // Mirroring
-            0x2000..=0x3FFF => self.ppu.read(addr - 0x2000),
+            0x2000..=0x3FFF => self.ppu.read(addr),
             0x4016 => self.controller_1.read(0), // TODO Remove arg
             0x4017 => self.controller_2.read(0),
-            0x4018..=0xFFFF => self.cartridge.mapper().prg_read(addr),
-            _ => unreachable!("Invalid read from address {}!", addr),
+            0x4018..=0xFFFF => self.cartridge.unwrap().prg_read(addr),
+            _ => unreachable!("Invalid read from address {:#X}!", addr),
         };
         println!("-- Read value {:#X} from {:#X}", val, addr);
         val
@@ -197,7 +223,7 @@ impl Ricoh2A03 {
             0x4016 => self.controller_1.write(0, val),
             0x4017 => self.controller_2.write(0, val),
             0x4018..=0xFFFF => {
-                self.cartridge.mapper_mut().prg_write(addr - 0x4018, val)
+                self.cartridge.unwrap().prg_write(addr, val)
             }
             _ => {
                 unreachable!("Invalid write {} to address {}!", val, addr)
@@ -735,7 +761,7 @@ impl Ricoh2A03 {
     }
 }
 
-impl Clocked for Ricoh2A03 {
+impl Clocked for Ricoh2A03<'_> {
     fn clock(&mut self) {
         use crate::instructions;
         use crate::instructions::AddressingMode::*;

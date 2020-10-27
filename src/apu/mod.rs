@@ -25,7 +25,7 @@ use self::pulse::Pulse;
 use self::triangle::Triangle;
 
 fn unused(addr: u16, val: u8) {
-    println!("Write {} to unused address {}!", val, addr);
+    println!("Write {:#X} to unused address {:#X}!", val, addr);
 }
 
 #[derive(Default, Clone)]
