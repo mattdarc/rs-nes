@@ -1,7 +1,6 @@
 // PPU implementation for rs-nes
 
-mod nametable;
-mod sdl_interface;
+pub mod sdl_interface;
 
 pub use sdl_interface::SDL2Intrf as Renderer; 
 
@@ -17,7 +16,7 @@ pub const PPU_NUM_SCANLINES: usize = 0;
 pub struct PPU<'a> {
     vram: RAM,
     registers: [u8; 8],
-    renderer: SDL2Intrf,
+    renderer: Option<SDL2Intrf>,
     cartridge: Option<&'a Cartridge>,
 }
 
@@ -44,13 +43,16 @@ impl<'a> PPU<'a> {
         PPU {
             vram: RAM::new(PPU_NUM_FRAMES * PPU_NUM_SCANLINES),
             registers: [0; 8],
-            renderer: SDL2Intrf::new(),
+            renderer: None,
             cartridge: None,
         }
     }
 
+    // TODO: Need to find a good way to initialize SDL once... seems like we
+    // should have a singleton SDL2 context
     pub fn init(&mut self, cartridge: &'a Cartridge) -> Result<(), Box<dyn std::error::Error>> {
-        self.renderer.init(&cartridge.get_name())
+	self.renderer = Some(SDL2Intrf::new()?);
+	Ok(())
     }
 
     fn base_nametable_addr(&self) -> usize {

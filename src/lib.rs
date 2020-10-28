@@ -14,4 +14,10 @@ mod ppu;
 mod vnes;
 
 pub use vnes::VNES as VNES;
-pub use ppu::Renderer as Renderer;
+
+pub mod graphics {
+    pub use super::ppu::Renderer as Renderer;
+    pub use super::ppu::sdl_interface::Texture as Texture;
+    pub use super::ppu::sdl_interface::Coordinates as Coordinates;
+    pub const FRAME_RATE_NS: u32 = 1_000_000_000 / 60;
+}
