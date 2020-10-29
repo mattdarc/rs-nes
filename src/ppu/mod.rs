@@ -1,167 +1,157 @@
 // PPU implementation for rs-nes
 
-pub mod sdl_interface;
+#![allow(dead_code)] // TODO: remove this once
 
-pub use sdl_interface::SDL2Intrf as Renderer; 
+mod registers;
 
 use crate::cartridge::*;
 use crate::common::*;
 use crate::memory::*;
-use crate::ppu::sdl_interface::*;
+use crate::sdl_interface::*;
+use crate::graphics::*;
+use registers::*;
+
+use std::cell::RefCell;
 
 pub const PPU_NUM_FRAMES: usize = 256;
 pub const PPU_NUM_SCANLINES: usize = 0;
 
 #[derive(Clone)]
+struct Internal {
+    status: Status,
+    addr_latch: bool,
+}
+
+impl Internal {
+    fn new() -> RefCell<Internal> {
+	RefCell::new(Internal {
+	    status: Status(0),
+	    addr_latch: false,
+	})
+    }
+}
+
+#[derive(Clone)]
 pub struct PPU<'a> {
-    vram: RAM,
-    registers: [u8; 8],
-    renderer: Option<SDL2Intrf>,
+    renderer: Option<Renderer>,
     cartridge: Option<&'a Cartridge>,
-}
 
-#[derive(Copy, Clone, Debug)]
-enum SpriteSize {
-    P8x8,
-    P8x16,
+    control: Control,
+    mask: Mask,
+    state: RefCell<Internal>,
+    oam_addr: u8,
+    oam_data: [u8; 0x100],
+    v_addr: VRAMAddr,
+    t_addr: VRAMAddr,
+    x_scroll: u8,
+    w: bool,
+    
+    cycle: u32,
+    scanline: u32,
 }
-
-#[derive(Copy, Clone, Debug)]
-enum EXTPins {
-    ReadBackdrop,
-    WriteColor,
-}
-
-struct Scroll(u32, u32);
 
 impl<'a> PPU<'a> {
-    const PPUCTRL: usize = 0;
-    const PPUMASK: usize = 1;
-    const PPUSTATUS: usize = 2;
+    const NUM_REGS: usize = 9;
 
     pub fn new() -> PPU<'a> {
         PPU {
-            vram: RAM::new(PPU_NUM_FRAMES * PPU_NUM_SCANLINES),
-            registers: [0; 8],
             renderer: None,
             cartridge: None,
+	    control: Control(0),
+	    mask: Mask(0),
+	    state: Internal::new(),
+	    oam_addr: 0,
+	    oam_data: [0; 256],
+	    v_addr: VRAMAddr(0),
+	    t_addr: VRAMAddr(0),
+	    x_scroll: 0,
+	    w: false,
+
+	    cycle: 0,
+	    scanline: 0,
         }
     }
 
-    // TODO: Need to find a good way to initialize SDL once... seems like we
-    // should have a singleton SDL2 context
     pub fn init(&mut self, cartridge: &'a Cartridge) -> Result<(), Box<dyn std::error::Error>> {
-	self.renderer = Some(SDL2Intrf::new()?);
+	// self.renderer = Some(Renderer::new()?);
+	self.cartridge = Some(cartridge);
 	Ok(())
     }
 
-    fn base_nametable_addr(&self) -> usize {
-        // After power/reset, writes to this register are ignored for about
-        // 30,000 cycles.
-        (self.registers[PPU::PPUCTRL] & 0x3) as usize
+    fn read_oam(&self) -> u8 {
+	0
     }
 
-    fn vram_increment(&self) -> usize {
-        if self.registers[PPU::PPUCTRL] & 0x4 != 0 {
-            32
-        } else {
-            1
-        }
+    fn write_oam(&mut self, val: u8) {
     }
 
-    fn sprite_table_addr(&self) -> usize {
-        if self.registers[PPU::PPUCTRL] & 0x8 != 0 {
-            0x1000
-        } else {
-            0x0000
-        }
+    fn write_scroll(&mut self, val: u8) {
     }
 
-    fn bg_table_addr(&self) -> usize {
-        if self.registers[PPU::PPUCTRL] & 0x10 != 0 {
-            0x1000
-        } else {
-            0x0000
-        }
+    fn write_ppu_addr(&mut self, val: u8) {
     }
 
-    fn sprite_size(&self) -> SpriteSize {
-        if self.registers[PPU::PPUCTRL] & 0x20 != 0 {
-            SpriteSize::P8x16
-        } else {
-            SpriteSize::P8x8
-        }
+    fn write_vram(&mut self, val: u8) {
+	self.cartridge.unwrap().chr_write(self.v_addr.read(), val);
     }
 
-    fn master_slave_sel(&self) -> EXTPins {
-        if self.registers[PPU::PPUCTRL] & 0x40 != 0 {
-            EXTPins::WriteColor
-        } else {
-            EXTPins::ReadBackdrop
-        }
+    fn read_vram(&self) -> u8 {
+	self.cartridge.unwrap().chr_read(self.v_addr.read())
     }
 
-    fn gen_nmi(&self) -> bool {
-        self.registers[PPU::PPUCTRL] & 0x80 != 0
-    }
-
-    fn scroll_pos(&self) -> Scroll {
-        let mut scroll = Scroll(0, 0);
-        if self.registers[PPU::PPUCTRL] & 0x1 != 0 {
-            scroll.0 = 256;
-        } else if self.registers[PPU::PPUCTRL] & 0x2 != 0 {
-            scroll.1 = 240;
-        }
-        scroll
-    }
-
-    fn grayscale(&self) -> bool {
-        self.registers[PPU::PPUMASK] & 0x1 != 0
-    }
-
-    fn show_leftmost_bg(&self) -> bool {
-        self.registers[PPU::PPUMASK] & 0x2 != 0
-    }
-
-    fn show_leftmost_sprites(&self) -> bool {
-        self.registers[PPU::PPUMASK] & 0x4 != 0
-    }
-
-    fn show_bg(&self) -> bool {
-        self.registers[PPU::PPUMASK] & 0x8 != 0
-    }
-
-    fn show_sprites(&self) -> bool {
-        self.registers[PPU::PPUMASK] & 0x10 != 0
-    }
-
-    fn emph_red(&self) -> bool {
-        self.registers[PPU::PPUMASK] & 0x20 != 0
-    }
-
-    fn emph_green(&self) -> bool {
-        self.registers[PPU::PPUMASK] & 0x40 != 0
-    }
-
-    fn emph_blue(&self) -> bool {
-        self.registers[PPU::PPUMASK] & 0x80 != 0
+    fn read_status(&self) -> u8 {
+	let ret = self.state.borrow().status.0;
+	let mut state = self.state.borrow_mut();
+	state.status.vblank(false);
+	state.addr_latch = false;
+	ret
     }
 }
 
+// TODO: match against each of the registers
 impl Writeable for PPU<'_> {
     fn write(&mut self, addr: usize, val: u8) {
-        let num_regs = self.registers.len();
-        self.registers[(addr - 0x2000) % num_regs] = val;
+	match addr % PPU::NUM_REGS {
+	    PPUCTRL => self.control.write(val),
+	    PPUMASK => self.mask.write(val),
+	    PPUSTATUS => {}, //panic!("PPUSTATUS unwriteable!"), TODO: Not sure why this is hit 
+	    OAMADDR => self.oam_addr = val,
+	    OAMDATA => self.write_oam(val),
+	    PPUSCROLL => self.write_scroll(val),
+	    PPUADDR => self.write_ppu_addr(val),
+	    PPUDATA => self.write_vram(val),
+	    _ => unreachable!(),
+	}
+	self.state.borrow_mut().status.set_low(val & 0x1F);
     }
 }
 
+// TODO: match against each of the registers
 impl Readable for PPU<'_> {
     fn read(&self, addr: usize) -> u8 {
-        let num_regs = self.registers.len();
-        self.registers[(addr - 0x2000) % num_regs]
+	match addr % PPU::NUM_REGS {
+	    PPUCTRL => panic!("PPUCTRL unreadable!"),
+	    PPUMASK => panic!("PPUMASK unreadable!"),
+	    PPUSTATUS => self.read_status(),
+	    OAMADDR => panic!("OAMADDR unreadable!"),
+	    OAMDATA => self.read_oam(),
+	    PPUSCROLL => panic!("PPUSCROLL unreadable!"),
+	    PPUADDR => panic!("PPUADDR unreadable!"),
+	    PPUDATA => self.read_vram(),
+	    _ => unreachable!(),
+	}
     }
 }
 
 impl Clocked for PPU<'_> {
-    fn clock(&mut self) {}
+    fn clock(&mut self) {
+	// OAMADDR is set to 0 during each of ticks 257-320 (the sprite tile loading
+	// interval) of the pre-render and visible scanlines.
+	if self.cycle > 256 && self.cycle < 321 {
+	    self.oam_addr = 0;
+	}
+
+	self.cycle = (self.cycle + 1) % 341;
+	self.scanline = (self.scanline + 1) % 262;
+    }
 }

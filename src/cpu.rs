@@ -124,7 +124,7 @@ impl<'a> Ricoh2A03<'a> {
             controller_1: Controller::default(),
             controller_2: Controller::default(),
         };
-        cpu.ppu.init(&cartridge);
+        cpu.ppu.init(&cartridge).unwrap();
         cpu
     }
 

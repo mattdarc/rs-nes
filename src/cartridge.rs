@@ -9,6 +9,8 @@ pub trait CartridgeInterface {
     fn load(filename: &str) -> Result<Cartridge, std::io::Error>;
     fn prg_read(&self, addr: usize) -> u8;
     fn prg_write(&self, addr: usize, val: u8);
+    fn chr_read(&self, addr: usize) -> u8;
+    fn chr_write(&self, addr: usize, val: u8);
 }
 
 #[derive(Debug, Default, Clone)]
@@ -47,6 +49,14 @@ impl CartridgeInterface for Cartridge {
 
     fn prg_write(&self, addr: usize, val: u8) {
         self.borrow_mut().mapper.prg_write(addr, val);
+    }
+
+    fn chr_read(&self, addr: usize) -> u8 {
+        self.borrow().mapper.chr_read(addr)
+    }
+
+    fn chr_write(&self, addr: usize, val: u8) {
+        self.borrow_mut().mapper.chr_write(addr, val);
     }
 }
 

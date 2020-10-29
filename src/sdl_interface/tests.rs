@@ -3,8 +3,6 @@ use sdl2::event::Event;
 use sdl2::keyboard::Keycode;
 use std::time::Duration;
 
-const TILE_SIZE: u32 = 8;
-
 fn main() {
     let mut renderer = Renderer::new().unwrap();
 
@@ -15,7 +13,7 @@ fn main() {
     let mut color: u8 = 0;
     'running: loop {
         let mut event_pump = renderer
-            .render(Texture::new(vec![color; 64], Coordinates::new(x, y), TILE_SIZE)).unwrap();
+            .render(Texture::new(vec![color; 64], Coordinates::new(x, y))).unwrap();
 
         for event in event_pump.poll_iter() {
             match event {

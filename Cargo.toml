@@ -9,11 +9,12 @@ name = "venus"
 path = "src/lib.rs"
 
 [[test]]
-name = "renderer_tests"
-path = "src/ppu/trenderer.rs"
+name = "sdl_tests"
+path = "src/sdl_interface/tests.rs"
 harness = false
 
 # See more keys and their definitions at https://doc.rust-lang.org/cargo/reference/manifest.html
 
 [dependencies]
 sdl2 = "0.32.1"
+bitfield = "0.13.2"
