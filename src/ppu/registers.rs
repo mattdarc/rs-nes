@@ -7,7 +7,7 @@ pub enum SpriteSize {
 }
 
 #[derive(Copy, Clone, Debug)]
-pub enum EXTPins {
+pub enum SlaveSel {
     ReadBackdrop,
     WriteColor,
 }
@@ -30,14 +30,14 @@ bitfield! {
     pub struct Control(u8);
     // After power/reset, writes to this register are ignored for about
     // 30,000 cycles.
-    pub base_nametable_addr, _   : 1, 0;
-    pub vram_increment, _        : 2;
-    pub sprite_table_addr, _     : 3;
-    pub background_table_addr, _ : 4;
-    pub sprite_size, _           : 5;
-    pub master_slave_sel, _      : 6;
+    bit_base_nametable_addr, _   : 1, 0;
+    bit_vram_increment, _        : 2;
+    bit_sprite_table_addr, _     : 3;
+    bit_background_table_addr, _ : 4;
+    bit_sprite_size, _           : 5;
+    bit_master_slave_sel, _      : 6;
     pub nmi, _                   : 7;
-    pub scroll_pos, _            : 1, 2;
+    bit_scroll_pos, _            : 1, 2;
 }
 
 bitfield! {
@@ -72,61 +72,61 @@ bitfield! {
     pub _, vblank         : 7;
 }
 
-// impl Control {
-    // pub fn vram_increment(&self) -> usize {
-    //     if self.0 & 0x4 != 0 {
-    //         32
-    //     } else {
-    //         1
-    //     }
-    // }
+impl Control {
+    pub fn vram_increment(&self) -> usize {
+        if self.bit_vram_increment() {
+            32
+        } else {
+            1
+        }
+    }
 
-    // pub fn sprite_table_addr(&self) -> usize {
-    //     if self.0 & 0x8 != 0 {
-    //         0x1000
-    //     } else {
-    //         0x0000
-    //     }
-    // }
+    pub fn sprite_table_addr(&self) -> usize {
+        if self.bit_sprite_table_addr() {
+            0x1000
+        } else {
+            0x0000
+        }
+    }
 
-    // pub fn bg_table_addr(&self) -> usize {
-    //     if self.0 & 0x10 != 0 {
-    //         0x1000
-    //     } else {
-    //         0x0000
-    //     }
-    // }
+    pub fn background_table_addr(&self) -> usize {
+        if self.bit_background_table_addr() {
+            0x1000
+        } else {
+            0x0000
+        }
+    }
 
-    // pub fn sprite_size(&self) -> SpriteSize {
-    //     if self.0 & 0x20 != 0 {
-    //         SpriteSize::P8x16
-    //     } else {
-    //         SpriteSize::P8x8
-    //     }
-    // }
+    pub fn sprite_size(&self) -> SpriteSize {
+        if self.bit_sprite_size() {
+            SpriteSize::P8x16
+        } else {
+            SpriteSize::P8x8
+        }
+    }
 
-    // pub fn master_slave_sel(&self) -> EXTPins {
-    //     if self.0 & 0x40 != 0 {
-    //         EXTPins::WriteColor
-    //     } else {
-    //         EXTPins::ReadBackdrop
-    //     }
-    // }
+    pub fn master_slave_sel(&self) -> SlaveSel {
+        if self.bit_master_slave_sel() {
+            SlaveSel::WriteColor
+        } else {
+            SlaveSel::ReadBackdrop
+        }
+    }
 
-    // pub fn gen_nmi(&self) -> bool {
-    //     self.0 & 0x80 != 0
-    // }
+    pub fn scroll_pos(&self) -> Scroll {
+        let mut scroll = Scroll(0, 0);
+        match self.bit_scroll_pos() {
+	    0 => Scroll(0, 0),
+	    1 => Scroll(256, 0),
+	    2 => Scroll(0, 240),
+	    3 => Scroll(256, 240),
+        }
+    }
 
-    // pub fn scroll_pos(&self) -> Scroll {
-    //     let mut scroll = Scroll(0, 0);
-    //     if self.0 & 0x1 != 0 {
-    //         scroll.0 = 256;
-    //     } else if self.0 & 0x2 != 0 {
-    //         scroll.1 = 240;
-    //     }
-    //     scroll
-    // }
-// }
+    pub fn write(&mut self, val: u8) {
+	self.0 = val;
+    }
+}
 
 impl Status {
     pub fn read(&self) -> u8 {
@@ -135,12 +135,6 @@ impl Status {
 }
 
 impl Mask {
-    pub fn write(&mut self, val: u8) {
-	self.0 = val;
-    }
-}
-
-impl Control {
     pub fn write(&mut self, val: u8) {
 	self.0 = val;
     }

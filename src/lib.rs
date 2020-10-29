@@ -27,3 +27,9 @@ pub mod graphics {
     pub use super::sdl_interface::graphics::Texture;
     pub const FRAME_RATE_NS: u32 = 1_000_000_000 / 60;
 }
+
+pub mod audio {
+}
+
+pub mod input {
+}
