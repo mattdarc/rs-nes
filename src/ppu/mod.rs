@@ -20,6 +20,7 @@ pub const PPU_NUM_SCANLINES: usize = 0;
 struct Internal {
     status: Status,
     addr_latch: bool,
+    second_write: bool,
 }
 
 impl Internal {
@@ -27,6 +28,7 @@ impl Internal {
 	RefCell::new(Internal {
 	    status: Status(0),
 	    addr_latch: false,
+	    second_write: false,
 	})
     }
 }
@@ -44,7 +46,6 @@ pub struct PPU<'a> {
     v_addr: VRAMAddr,
     t_addr: VRAMAddr,
     x_scroll: u8,
-    w: bool,
     
     cycle: u32,
     scanline: u32,
@@ -65,7 +66,6 @@ impl<'a> PPU<'a> {
 	    v_addr: VRAMAddr(0),
 	    t_addr: VRAMAddr(0),
 	    x_scroll: 0,
-	    w: false,
 
 	    cycle: 0,
 	    scanline: 0,
@@ -86,6 +86,15 @@ impl<'a> PPU<'a> {
     }
 
     fn write_scroll(&mut self, val: u8) {
+	let second_write = self.state.borrow().second_write; 
+	if second_write {
+	    // Second write: w == 1 
+	} else {
+	    // First write: w == 0
+	    self.t_addr.coarse_x(val.into() >> 3);
+	}
+	self.x_scroll = val & 0x7;
+	self.state.borrow_mut().second_write = !second_write;
     }
 
     fn write_ppu_addr(&mut self, val: u8) {
@@ -104,6 +113,7 @@ impl<'a> PPU<'a> {
 	let mut state = self.state.borrow_mut();
 	state.status.vblank(false);
 	state.addr_latch = false;
+	state.write_toggle = false;
 	ret
     }
 }
@@ -112,7 +122,10 @@ impl<'a> PPU<'a> {
 impl Writeable for PPU<'_> {
     fn write(&mut self, addr: usize, val: u8) {
 	match addr % PPU::NUM_REGS {
-	    PPUCTRL => self.control.write(val),
+	    PPUCTRL => {
+		self.control.write(val);
+		self.t_addr.nametable_sel(val.into());
+	    },
 	    PPUMASK => self.mask.write(val),
 	    PPUSTATUS => {}, //panic!("PPUSTATUS unwriteable!"), TODO: Not sure why this is hit 
 	    OAMADDR => self.oam_addr = val,

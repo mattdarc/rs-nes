@@ -43,10 +43,10 @@ bitfield! {
 bitfield! {
     #[derive(Clone)]
     pub struct VRAMAddr(u16);
-    pub coarse_x, _      : 4, 0;
-    pub coarse_y, _      : 9, 5;
-    pub nametable_sel, _ : 11, 10;
-    pub fine_y, _        : 14, 12;
+    pub _, coarse_x      : 4, 0;
+    pub _, coarse_y      : 9, 5;
+    pub _, nametable_sel : 11, 10;
+    pub _, fine_y        : 14, 12;
 }
 
 bitfield! {
