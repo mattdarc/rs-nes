@@ -141,7 +141,15 @@ impl Mask {
 }
 
 impl VRAMAddr {
-    pub fn read(&self) -> usize {
-        (self.0 & 0x3F) as usize
+    pub fn read(&self) -> u16 {
+        self.0 & 0x3F
+    }
+
+    pub fn write(&mut self, val: u16) {
+        self.0 = val;
+    }
+
+    pub fn write_low(&mut self, val: u8) {
+        self.0 = (self.0 & 0xFF00) | (val as u16);
     }
 }

@@ -90,22 +90,36 @@ impl<'a> PPU<'a> {
         let second_write = self.state.borrow().second_write;
         if second_write {
             // Second write: w == 1
+            self.t_addr.fine_y((val as u16) & 0x7);
+            self.t_addr.coarse_y((val as u16) >> 3);
         } else {
             // First write: w == 0
             self.t_addr.coarse_x((val as u16) >> 3);
+            self.x_scroll = val & 0x7;
         }
-        self.x_scroll = val & 0x7;
         self.state.borrow_mut().second_write = !second_write;
     }
 
-    fn write_ppu_addr(&mut self, val: u8) {}
+    fn write_ppu_addr(&mut self, val: u8) {
+        let second_write = self.state.borrow().second_write;
+        if second_write {
+            self.t_addr.write_low(val)
+        } else {
+            let modif = (val & 0x3F) as u16;
+            let old_val = self.t_addr.read() & 0x80FF;
+            self.t_addr.write((modif << 8) | old_val);
+        }
+
+        // toggle first/second write
+        self.state.borrow_mut().second_write = !second_write;
+    }
 
     fn write_vram(&mut self, val: u8) {
-        self.cartridge.unwrap().chr_write(self.v_addr.read(), val);
+        self.cartridge.unwrap().chr_write(self.v_addr.read() as usize, val);
     }
 
     fn read_vram(&self) -> u8 {
-        self.cartridge.unwrap().chr_read(self.v_addr.read())
+        self.cartridge.unwrap().chr_read(self.v_addr.read() as usize)
     }
 
     fn read_status(&self) -> u8 {
