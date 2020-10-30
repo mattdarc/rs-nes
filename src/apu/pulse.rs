@@ -1,6 +1,6 @@
-use crate::common::*;
-use crate::apu::volume::Envelope;
 use crate::apu::counter::{Counter, LengthCounter};
+use crate::apu::volume::Envelope;
+use crate::common::*;
 
 #[derive(Clone)]
 enum Arithmetic {
@@ -10,7 +10,7 @@ enum Arithmetic {
 
 impl Default for Arithmetic {
     fn default() -> Arithmetic {
-	Arithmetic::TwosCompliment
+        Arithmetic::TwosCompliment
     }
 }
 
@@ -41,12 +41,12 @@ struct PulseSequencer {
 
 impl Sweep {
     fn new() -> Sweep {
-	Sweep {
-	    divider: Counter::new(0),
-	    enabled: true,
-	    negate: false,
-	    shift: 0,
-	}
+        Sweep {
+            divider: Counter::new(0),
+            enabled: true,
+            negate: false,
+            shift: 0,
+        }
     }
 
     fn load(&mut self, val: u8) {
@@ -57,7 +57,7 @@ impl Sweep {
     }
 
     fn update_tgt_period(&mut self, tmr: u16, offset: u16) -> u16 {
-	self.divider.clock();
+        self.divider.clock();
         if self.divider.has_edge() && self.enabled {
             let change = tmr >> self.shift;
             if self.negate {
@@ -83,10 +83,10 @@ impl PulseSequencer {
     const SEQ_4: [u8; PulseSequencer::SEQ_LEN] = [1, 0, 0, 1, 1, 1, 1, 1];
 
     fn new() -> PulseSequencer {
-	PulseSequencer {
-	    idx: 0,
-	    seq: &PulseSequencer::SEQ_1,
-	}
+        PulseSequencer {
+            idx: 0,
+            seq: &PulseSequencer::SEQ_1,
+        }
     }
 
     fn reset(&mut self) {
@@ -132,40 +132,40 @@ impl Sampled for Pulse {
 impl Clocked for Pulse {
     fn clock(&mut self) {
         self.sequencer.clock();
-	self.timer.clock();
+        self.timer.clock();
     }
 }
 
 impl Pulse {
     pub fn ones_complement() -> Pulse {
-	Pulse {
-	    timer: Counter::new(0),
-	    envelope: Envelope::new(),
-	    sweep: Sweep::new(),
-	    sequencer: PulseSequencer::new(),
-	    length_counter: LengthCounter::new(0),
-	    arithmetic_type: Arithmetic::OnesCompliment,
-	    enabled: true,
-	}
+        Pulse {
+            timer: Counter::new(0),
+            envelope: Envelope::new(),
+            sweep: Sweep::new(),
+            sequencer: PulseSequencer::new(),
+            length_counter: LengthCounter::new(0),
+            arithmetic_type: Arithmetic::OnesCompliment,
+            enabled: true,
+        }
     }
 
     pub fn twos_complement() -> Pulse {
-	Pulse {
-	    timer: Counter::new(0),
-	    envelope: Envelope::new(),
-	    sweep: Sweep::new(),
-	    sequencer: PulseSequencer::new(),
-	    length_counter: LengthCounter::new(0),
-	    arithmetic_type: Arithmetic::TwosCompliment,
-	    enabled:true
-	}
+        Pulse {
+            timer: Counter::new(0),
+            envelope: Envelope::new(),
+            sweep: Sweep::new(),
+            sequencer: PulseSequencer::new(),
+            length_counter: LengthCounter::new(0),
+            arithmetic_type: Arithmetic::TwosCompliment,
+            enabled: true,
+        }
     }
 
     pub fn set_enabled(&mut self, enabled: bool) {
-	self.enabled = enabled;
-	if !enabled {
-	    self.length_counter.disable();
-	}
+        self.enabled = enabled;
+        if !enabled {
+            self.length_counter.disable();
+        }
     }
 
     pub fn set_volume_grp(&mut self, val: u8) {
@@ -202,11 +202,11 @@ impl Pulse {
     }
 
     fn clock_sweep(&mut self) {
-	let period = self.timer.get_period();
-	let offset = match self.arithmetic_type {
-	    Arithmetic::OnesCompliment => 1,
-	    Arithmetic::TwosCompliment => 0,
-	};
+        let period = self.timer.get_period();
+        let offset = match self.arithmetic_type {
+            Arithmetic::OnesCompliment => 1,
+            Arithmetic::TwosCompliment => 0,
+        };
         self.timer
             .set_period(self.sweep.update_tgt_period(period, offset));
     }
@@ -227,6 +227,6 @@ mod tests {
 
     #[test]
     fn test_pulse() {
-	// TODO
+        // TODO
     }
 }

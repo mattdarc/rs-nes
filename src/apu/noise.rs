@@ -1,6 +1,6 @@
-use crate::common::*;
 use crate::apu::counter::*;
 use crate::apu::volume::*;
+use crate::common::*;
 
 #[derive(Default, Clone)]
 pub struct Noise {
@@ -19,12 +19,10 @@ struct LFShiftRegister {
 
 impl Noise {
     const LUT_NTSC: [u16; 16] = [
-        4, 8, 16, 32, 64, 96, 128, 160, 202, 254, 380, 508, 762, 1016,
-        2034, 4068,
+        4, 8, 16, 32, 64, 96, 128, 160, 202, 254, 380, 508, 762, 1016, 2034, 4068,
     ];
     const LUT_PAL: [u16; 16] = [
-        4, 8, 14, 30, 60, 88, 118, 148, 188, 236, 354, 472, 708, 944,
-        1890, 3778,
+        4, 8, 14, 30, 60, 88, 118, 148, 188, 236, 354, 472, 708, 944, 1890, 3778,
     ];
 
     pub fn new() -> Noise {
@@ -61,10 +59,10 @@ impl Noise {
     }
 
     pub fn set_enabled(&mut self, enabled: bool) {
-	self.enabled = enabled;
-	if !enabled {
-	    self.length_counter.disable();
-	}
+        self.enabled = enabled;
+        if !enabled {
+            self.length_counter.disable();
+        }
     }
 
     pub fn quarter_frame(&mut self) {
@@ -133,6 +131,6 @@ mod tests {
 
     #[test]
     fn test_dmc() {
-	// TODO
+        // TODO
     }
 }

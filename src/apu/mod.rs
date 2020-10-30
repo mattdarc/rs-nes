@@ -9,17 +9,17 @@
 
 mod counter;
 mod dmc;
+mod mixer;
 mod noise;
 mod pulse;
 mod triangle;
 mod volume;
-mod mixer;
 
 use crate::common::*;
 
-use self::mixer::Mixer;
 use self::counter::{Frame, FrameCounter};
 use self::dmc::DMC;
+use self::mixer::Mixer;
 use self::noise::Noise;
 use self::pulse::Pulse;
 use self::triangle::Triangle;
@@ -83,32 +83,32 @@ impl APU {
 impl Sampled for APU {
     type OutputType = i16;
     fn sample(&self) -> Self::OutputType {
-        let pulse = self.pulse1.sample()
-            + self.pulse2.sample();
+        let pulse = self.pulse1.sample() + self.pulse2.sample();
         let tri = self.triangle.sample();
         let noi = self.noise.sample();
         let dmc = self.dmc.sample();
 
-
-	// TODO replace with LUT
-	let pulse_out = if pulse != 0 {
+        // TODO replace with LUT
+        let pulse_out = if pulse != 0 {
             95.88 / ((8218.0 / (pulse as f64)) + 100.0)
-	} else {
-	    0.0
-	};
-	
+        } else {
+            0.0
+        };
+
         let tnd_out = if tri != 0 || noi != 0 || dmc != 0 {
-	    159.79
-		/ ((1.0 / ((tri as f64 / 8227.0) +
-			   (noi as f64 / 12241.0) +
-			   (dmc as f64 / 22638.0))) + 100.0)
-	} else {
-	    0.0
-	};
+            159.79
+                / ((1.0
+                    / ((tri as f64 / 8227.0)
+                        + (noi as f64 / 12241.0)
+                        + (dmc as f64 / 22638.0)))
+                    + 100.0)
+        } else {
+            0.0
+        };
 
-	let scaled = (pulse_out + tnd_out) * 65535.0;
+        let scaled = (pulse_out + tnd_out) * 65535.0;
 
-	self.mixer.filter(scaled) as i16
+        self.mixer.filter(scaled) as i16
     }
 }
 
@@ -139,9 +139,9 @@ impl Writeable for APU {
                 self.dmc.set_enabled(!bit_set!(val, APU::DMC_STATUS));
             }
             0x4017 => {
-		let frame_number = self.frame_counter.set_control(val);
-		self.clock_frame(frame_number);
-	    },
+                let frame_number = self.frame_counter.set_control(val);
+                self.clock_frame(frame_number);
+            }
 
             _ => unreachable!("Invalid APU address!"),
         }
@@ -162,8 +162,8 @@ impl Clocked for APU {
             self.dmc.clock();
         }
 
-	let frame_number = self.frame_counter.get_number();
-	self.clock_frame(frame_number);
+        let frame_number = self.frame_counter.get_number();
+        self.clock_frame(frame_number);
 
         self.even_cycle = !self.even_cycle;
     }

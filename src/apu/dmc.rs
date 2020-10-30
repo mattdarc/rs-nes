@@ -23,7 +23,7 @@ impl DMC {
             rate_index: 0,
             irq_enabled: false,
             loop_flag: true,
-	    enabled: true,
+            enabled: true,
         }
     }
 
@@ -46,14 +46,12 @@ impl DMC {
     }
 
     pub fn set_enabled(&mut self, enabled: bool) {
-	self.enabled = enabled;
+        self.enabled = enabled;
     }
 
-    pub fn quarter_frame(&mut self) {
-    }
+    pub fn quarter_frame(&mut self) {}
 
-    pub fn half_frame(&mut self) {
-    }
+    pub fn half_frame(&mut self) {}
 }
 
 impl Clocked for DMC {
@@ -73,6 +71,6 @@ mod tests {
 
     #[test]
     fn dmc() {
-	// TODO
+        // TODO
     }
 }

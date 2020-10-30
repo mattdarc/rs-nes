@@ -28,8 +28,6 @@ pub mod graphics {
     pub const FRAME_RATE_NS: u32 = 1_000_000_000 / 60;
 }
 
-pub mod audio {
-}
+pub mod audio {}
 
-pub mod input {
-}
+pub mod input {}

@@ -84,8 +84,8 @@ impl Default for Counter {
 
 impl LengthCounter {
     const LUT: [u16; 32] = [
-        10, 254, 20, 2, 40, 4, 80, 6, 160, 8, 60, 10, 14, 12, 26, 14, 12,
-        16, 24, 18, 48, 20, 96, 22, 192, 24, 72, 26, 16, 28, 32, 30,
+        10, 254, 20, 2, 40, 4, 80, 6, 160, 8, 60, 10, 14, 12, 26, 14, 12, 16, 24, 18, 48,
+        20, 96, 22, 192, 24, 72, 26, 16, 28, 32, 30,
     ];
 
     pub fn new(period: u16) -> LengthCounter {
@@ -96,8 +96,8 @@ impl LengthCounter {
     }
 
     pub fn disable(&mut self) {
-	self.counter.set_period(0);
-	self.counter.clear();
+        self.counter.set_period(0);
+        self.counter.clear();
     }
 
     pub fn silenced(&self) -> bool {
@@ -107,7 +107,7 @@ impl LengthCounter {
     pub fn set_period(&mut self, val: u8) {
         assert!(val < 32);
         self.counter.set_period(LengthCounter::LUT[val as usize]);
-	self.counter.set_reload();
+        self.counter.set_reload();
     }
 
     pub fn clear(&mut self) {
@@ -130,47 +130,46 @@ impl FrameCounter {
     pub fn new() -> FrameCounter {
         FrameCounter {
             counter: 0,
-	    period: 3,
+            period: 3,
             set_irq: false,
         }
     }
 
     pub fn set_control(&mut self, val: u8) -> Frame {
-	let mode_flag = bit_set!(val, FrameCounter::MODE_BIT);
+        let mode_flag = bit_set!(val, FrameCounter::MODE_BIT);
         match mode_flag {
             false => self.period = 3,
             true => self.period = 4,
         }
         self.set_irq = !bit_set!(val, FrameCounter::IRQ_INHIBIT);
 
-	match mode_flag {
-	    false => Frame::None,
-	    true => Frame::Half,
-	}
+        match mode_flag {
+            false => Frame::None,
+            true => Frame::Half,
+        }
     }
 
     pub fn get_number(&mut self) -> Frame {
-	eprintln!("Counter State: {}", self.counter);
-	if self.period == 3 {
-	    match self.counter {
-		0 => Frame::Quarter,
-		1 => Frame::Half,
-		2 => Frame::Quarter,
-		3 => Frame::Interrupt,
-		c => unreachable!("Invalid counter for frame counter {}!", c),
-	    }
-	} else {
-	    match self.counter {
-		0 => Frame::Quarter,
-		1 => Frame::Half,
-		2 => Frame::Quarter,
-		3 => Frame::None,
-		4 => Frame::Half,
-		c => unreachable!("Invalid counter for frame counter {}!", c),
-	    }
-	}
+        eprintln!("Counter State: {}", self.counter);
+        if self.period == 3 {
+            match self.counter {
+                0 => Frame::Quarter,
+                1 => Frame::Half,
+                2 => Frame::Quarter,
+                3 => Frame::Interrupt,
+                c => unreachable!("Invalid counter for frame counter {}!", c),
+            }
+        } else {
+            match self.counter {
+                0 => Frame::Quarter,
+                1 => Frame::Half,
+                2 => Frame::Quarter,
+                3 => Frame::None,
+                4 => Frame::Half,
+                c => unreachable!("Invalid counter for frame counter {}!", c),
+            }
+        }
     }
-
 }
 
 impl Clocked for LengthCounter {
@@ -197,11 +196,11 @@ impl Clocked for Counter {
 
 impl Clocked for FrameCounter {
     fn clock(&mut self) {
-	if self.counter == self.period {
-	    self.counter = 0;
-	} else {
-	    self.counter += 1;
-	}
+        if self.counter == self.period {
+            self.counter = 0;
+        } else {
+            self.counter += 1;
+        }
     }
 }
 
@@ -217,19 +216,19 @@ mod tests {
         assert_eq!(counter.get_period(), period);
 
         let mut decr = 1;
-	counter.clock();
+        counter.clock();
         while !counter.has_edge() {
             assert_eq!(counter.get_count(), period - decr);
-	    counter.clock();
+            counter.clock();
             decr += 1;
         }
         assert_eq!(decr, period + 1);
         assert_eq!(counter.get_count(), period);
 
         decr = 1;
-	counter.set_loop(false);
+        counter.set_loop(false);
         while counter.get_count() != 0 {
-	    counter.clock();
+            counter.clock();
             assert_eq!(counter.get_count(), period - decr);
             decr += 1;
         }
@@ -264,34 +263,34 @@ mod tests {
     #[test]
     fn frame_counter() {
         let mut frm_ctr = FrameCounter::new();
-	assert_eq!(frm_ctr.get_number(), Frame::Quarter);
+        assert_eq!(frm_ctr.get_number(), Frame::Quarter);
 
         frm_ctr.clock();
-	assert_eq!(frm_ctr.get_number(), Frame::Half);
+        assert_eq!(frm_ctr.get_number(), Frame::Half);
 
         frm_ctr.clock();
-	assert_eq!(frm_ctr.get_number(), Frame::Quarter);
+        assert_eq!(frm_ctr.get_number(), Frame::Quarter);
 
         frm_ctr.clock();
-	assert_eq!(frm_ctr.get_number(), Frame::Interrupt);
+        assert_eq!(frm_ctr.get_number(), Frame::Interrupt);
 
         frm_ctr.clock();
-	assert_eq!(frm_ctr.get_number(), Frame::Quarter);
+        assert_eq!(frm_ctr.get_number(), Frame::Quarter);
 
-	// Change to the next mode (end of cycle)
-	frm_ctr.set_control(1 << FrameCounter::MODE_BIT);
-	assert_eq!(frm_ctr.get_number(), Frame::Quarter);
-
-        frm_ctr.clock();
-	assert_eq!(frm_ctr.get_number(), Frame::Half);
+        // Change to the next mode (end of cycle)
+        frm_ctr.set_control(1 << FrameCounter::MODE_BIT);
+        assert_eq!(frm_ctr.get_number(), Frame::Quarter);
 
         frm_ctr.clock();
-	assert_eq!(frm_ctr.get_number(), Frame::Quarter);
+        assert_eq!(frm_ctr.get_number(), Frame::Half);
 
         frm_ctr.clock();
-	assert_eq!(frm_ctr.get_number(), Frame::None);
+        assert_eq!(frm_ctr.get_number(), Frame::Quarter);
 
         frm_ctr.clock();
-	assert_eq!(frm_ctr.get_number(), Frame::Half);
+        assert_eq!(frm_ctr.get_number(), Frame::None);
+
+        frm_ctr.clock();
+        assert_eq!(frm_ctr.get_number(), Frame::Half);
     }
 }

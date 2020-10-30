@@ -121,7 +121,7 @@ impl Instruction {
         Instruction {
             name: InstrName::INV,
             mode: AddressingMode::Invalid,
-	    cycles: 0,
+            cycles: 0,
         }
     }
 
@@ -147,9 +147,9 @@ const fn create_opcode_table() -> [Instruction; 256] {
     use crate::instructions::InstrName::*;
 
     macro_rules! create_instr {
-	($opcode:literal; $name:ident, $mode:ident, $c:literal) => {
-	    tbl[$opcode] = Instruction::new($name, $mode, $c);
-	};
+        ($opcode:literal; $name:ident, $mode:ident, $c:literal) => {
+            tbl[$opcode] = Instruction::new($name, $mode, $c);
+        };
     }
 
     create_instr!(0x69; ADC, Immediate, 2);

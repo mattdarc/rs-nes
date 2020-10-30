@@ -434,9 +434,8 @@ macro_rules! test_rom {
     ($name:ident => $rom:literal) => {
         #[test]
         fn $name() {
-            let cart = Cartridge::load($rom).unwrap_or_else(|e| {
-                unreachable!("Error with \"{:?}\": {:?}", $rom, e)
-            });
+            let cart = Cartridge::load($rom)
+                .unwrap_or_else(|e| unreachable!("Error with \"{:?}\": {:?}", $rom, e));
             let mut cpu = Ricoh2A03::with(&cart);
             cpu.init();
             cpu.run_for(10_000);

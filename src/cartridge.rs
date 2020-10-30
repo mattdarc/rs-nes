@@ -1,6 +1,6 @@
 use crate::mapper::*;
-use std::io::Read;
 use std::cell::RefCell;
+use std::io::Read;
 
 pub type Cartridge = RefCell<CartridgeImpl>;
 
@@ -67,8 +67,8 @@ pub mod test {
 
     pub fn program(data: &[u8]) -> CartridgeImpl {
         CartridgeImpl {
-	    name: String::default(),
-	    mapper: test::mapper_with(data),
+            name: String::default(),
+            mapper: test::mapper_with(data),
         }
     }
 }

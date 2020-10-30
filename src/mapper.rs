@@ -167,10 +167,7 @@ impl Mapper0 {
 
     fn new(header: &Header, data: &[u8]) -> Self {
         Mapper0 {
-            prg_rom: ROM::with_data_and_size(
-                data,
-                header.get_prg_rom_size(),
-            ),
+            prg_rom: ROM::with_data_and_size(data, header.get_prg_rom_size()),
             prg_ram: RAM::new(header.get_prg_ram_size()),
             chr_ram: RAM::new(header.get_chr_ram_size()),
         }
@@ -191,10 +188,7 @@ impl Mapper1 {
         Mapper1 {
             chr_ram: RAM::new(header.get_chr_ram_size()),
             prg_ram: RAM::new(header.get_prg_ram_size()),
-            prg_rom: ROM::with_data_and_size(
-                data,
-                header.get_prg_rom_size(),
-            ),
+            prg_rom: ROM::with_data_and_size(data, header.get_prg_rom_size()),
         }
     }
 }
@@ -220,9 +214,7 @@ impl Mapper for Mapper1 {
     fn prg_write(&mut self, addr: usize, val: u8) {
         match addr {
             0x6000..=0x7FFF => self.prg_ram.write(addr - 0x6000, val),
-            0x8000..=0xFFFF => {
-                unreachable!("Tried to write to ROM at address {}!", addr)
-            }
+            0x8000..=0xFFFF => unreachable!("Tried to write to ROM at address {}!", addr),
             _ => unreachable!("Invalid read of address {}!", addr),
         };
     }
@@ -334,8 +326,8 @@ mod tests {
     #[test]
     fn header() {
         const HEADER_RAW: [u8; 16] = [
-            0x4e, 0x45, 0x53, 0x1a, 0x10, 0x12, 0x11, 0x00, 0x13, 0x00,
-            0x00, 0x00, 0x00, 0x00, 0x00, 0x00,
+            0x4e, 0x45, 0x53, 0x1a, 0x10, 0x12, 0x11, 0x00, 0x13, 0x00, 0x00, 0x00, 0x00,
+            0x00, 0x00, 0x00,
         ];
 
         let header = Header::from(&HEADER_RAW);

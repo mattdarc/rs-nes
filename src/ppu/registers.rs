@@ -60,7 +60,7 @@ bitfield! {
     pub more_red, _             : 5;
     pub more_green, _           : 6;
     pub more_blue, _            : 7;
-    
+
 }
 
 bitfield! {
@@ -114,34 +114,34 @@ impl Control {
     }
 
     pub fn scroll_pos(&self) -> Scroll {
-        let mut scroll = Scroll(0, 0);
         match self.bit_scroll_pos() {
-	    0 => Scroll(0, 0),
-	    1 => Scroll(256, 0),
-	    2 => Scroll(0, 240),
-	    3 => Scroll(256, 240),
+            0 => Scroll(0, 0),
+            1 => Scroll(256, 0),
+            2 => Scroll(0, 240),
+            3 => Scroll(256, 240),
+            _ => unreachable!(),
         }
     }
 
     pub fn write(&mut self, val: u8) {
-	self.0 = val;
+        self.0 = val;
     }
 }
 
 impl Status {
     pub fn read(&self) -> u8 {
-	self.0
+        self.0
     }
 }
 
 impl Mask {
     pub fn write(&mut self, val: u8) {
-	self.0 = val;
+        self.0 = val;
     }
 }
 
 impl VRAMAddr {
     pub fn read(&self) -> usize {
-	(self.0 & 0x3F) as usize
+        (self.0 & 0x3F) as usize
     }
 }

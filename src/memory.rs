@@ -12,20 +12,16 @@ pub struct RAM {
 
 impl ROM {
     pub fn new() -> ROM {
-        ROM {
-            data: Vec::new(),
-        }
+        ROM { data: Vec::new() }
     }
 
     pub fn with_data_and_size(data: &[u8], size: usize) -> ROM {
-	println!("-- Creating ROM of size {}", size);
-	let mut rom = vec![0; size];
-	for (i, &b) in data.iter().enumerate() {
-	    rom[i] = b;
-	}
-        ROM {
-            data: rom,
+        println!("-- Creating ROM of size {}", size);
+        let mut rom = vec![0; size];
+        for (i, &b) in data.iter().enumerate() {
+            rom[i] = b;
         }
+        ROM { data: rom }
     }
 
     pub fn len(&self) -> usize {
@@ -41,11 +37,13 @@ impl Readable for ROM {
 
 impl RAM {
     pub fn new(size: usize) -> RAM {
-	RAM{data: vec![0; size]}
+        RAM {
+            data: vec![0; size],
+        }
     }
 
     pub fn len(&self) -> usize {
-	self.data.len()
+        self.data.len()
     }
 }
 
@@ -60,4 +58,3 @@ impl Writeable for RAM {
         self.data[idx] = val;
     }
 }
-

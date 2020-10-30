@@ -36,7 +36,7 @@ impl Envelope {
 impl Clocked for Envelope {
     fn clock(&mut self) {
         if !self.start {
-	    self.divider.clock();
+            self.divider.clock();
             if self.divider.has_edge() {
                 self.decay.clock();
             }
@@ -57,5 +57,4 @@ impl Sampled for Envelope {
             self.decay.get_count()
         }
     }
-
 }

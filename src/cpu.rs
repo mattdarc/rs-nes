@@ -150,8 +150,7 @@ impl<'a> Ricoh2A03<'a> {
     }
 
     pub fn insert(
-        &mut self,
-        cartridge: &'a Cartridge,
+        &mut self, cartridge: &'a Cartridge,
     ) -> Result<(), Box<dyn std::error::Error>> {
         self.cartridge = Some(cartridge);
         self.ppu.init(cartridge)
@@ -226,12 +225,8 @@ impl Ricoh2A03<'_> {
             0x2000..=0x3FFF => self.ppu.write(addr, val),
             0x4016 => self.controller_1.write(0, val),
             0x4017 => self.controller_2.write(0, val),
-            0x4018..=0xFFFF => {
-                self.cartridge.unwrap().prg_write(addr, val)
-            }
-            _ => {
-                unreachable!("Invalid write {} to address {}!", val, addr)
-            }
+            0x4018..=0xFFFF => self.cartridge.unwrap().prg_write(addr, val),
+            _ => unreachable!("Invalid write {} to address {}!", val, addr),
         }
     }
 
@@ -252,9 +247,7 @@ impl Ricoh2A03<'_> {
                 let low = self.read(ptr) as u16;
                 low.wrapping_add(self.x as u16)
             }
-            ZeroPageY => {
-                (self.read(ptr) as u16).wrapping_add(self.y as u16)
-            }
+            ZeroPageY => (self.read(ptr) as u16).wrapping_add(self.y as u16),
             Absolute => self.read16(ptr),
             AbsoluteX => {
                 let base = self.read16(ptr);
@@ -294,8 +287,8 @@ impl Ricoh2A03<'_> {
     fn write_mem(&mut self, mode: &AddressingMode, val: u8) {
         use crate::instructions::AddressingMode::*;
         match &mode {
-            ZeroPage | ZeroPageX | ZeroPageY | Absolute | AbsoluteX
-            | AbsoluteY | Indirect | IndirectX | IndirectY => {
+            ZeroPage | ZeroPageX | ZeroPageY | Absolute | AbsoluteX | AbsoluteY
+            | Indirect | IndirectX | IndirectY => {
                 let addr = self.get_addr(mode) as usize;
                 self.write(addr, val);
             }
@@ -308,8 +301,8 @@ impl Ricoh2A03<'_> {
     fn read_mem(&mut self, mode: &AddressingMode) -> u8 {
         use crate::instructions::AddressingMode::*;
         match &mode {
-            ZeroPage | ZeroPageX | ZeroPageY | Absolute | AbsoluteX
-            | AbsoluteY | Indirect | IndirectX | IndirectY => {
+            ZeroPage | ZeroPageX | ZeroPageY | Absolute | AbsoluteX | AbsoluteY
+            | Indirect | IndirectX | IndirectY => {
                 let addr = self.get_addr(mode) as usize;
                 self.read(addr)
             }
@@ -334,14 +327,12 @@ impl Ricoh2A03<'_> {
     }
 
     fn peek(&self) -> u8 {
-        let ptr =
-            (self.sp as u16).wrapping_add(Ricoh2A03::STACK_BEGIN) as usize;
+        let ptr = (self.sp as u16).wrapping_add(Ricoh2A03::STACK_BEGIN) as usize;
         self.read(ptr)
     }
 
     fn poke(&mut self, val: u8) {
-        let ptr =
-            (self.sp as u16).wrapping_add(Ricoh2A03::STACK_BEGIN) as usize;
+        let ptr = (self.sp as u16).wrapping_add(Ricoh2A03::STACK_BEGIN) as usize;
         self.write(ptr, val);
     }
 
@@ -771,10 +762,7 @@ impl Clocked for Ricoh2A03<'_> {
 
         self.cycle += 1;
         if self.noop_cycles > 0 {
-            println!(
-                "-- Running No-Op instruction, {} left",
-                self.noop_cycles
-            );
+            println!("-- Running No-Op instruction, {} left", self.noop_cycles);
             self.noop_cycles -= 1;
             return;
         }
@@ -854,8 +842,10 @@ impl Clocked for Ricoh2A03<'_> {
             NOP => self.nop(),
             _ => {
                 let last_pc = self.pc - 1;
-                unreachable!("-- Invalid Instruction. Surrounding instructions: {:?}",
-			     self.read_n((last_pc - 2) as usize, 5));
+                unreachable!(
+                    "-- Invalid Instruction. Surrounding instructions: {:?}",
+                    self.read_n((last_pc - 2) as usize, 5)
+                );
             }
         }
 

@@ -1,4 +1,3 @@
-
 // Clocked trait that is called as the entry point of execution of the
 // component.  Returns true if a timer edge was hit, and the component was
 // actually executed

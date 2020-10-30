@@ -1,7 +1,7 @@
-use venus::graphics::{Coordinates, Renderer, Texture};
 use sdl2::event::Event;
 use sdl2::keyboard::Keycode;
 use std::time::Duration;
+use venus::graphics::{Coordinates, Renderer, Texture};
 
 fn main() {
     let mut renderer = Renderer::new().unwrap();
@@ -13,7 +13,8 @@ fn main() {
     let mut color: u8 = 0;
     'running: loop {
         let mut event_pump = renderer
-            .render(Texture::new(vec![color; 64], Coordinates::new(x, y))).unwrap();
+            .render(Texture::new(vec![color; 64], Coordinates::new(x, y)))
+            .unwrap();
 
         for event in event_pump.poll_iter() {
             match event {
@@ -26,15 +27,15 @@ fn main() {
             }
         }
         ::std::thread::sleep(Duration::new(0, venus::graphics::FRAME_RATE_NS));
-	if x > 800 || x < 0 {
-	    dx *= -1;
-	}
-	if y > 600 || y < 0 {
-	    dy *= -1;
-	}
+        if x > 800 || x < 0 {
+            dx *= -1;
+        }
+        if y > 600 || y < 0 {
+            dy *= -1;
+        }
 
-	x += dx;
-	y += dy;
-	color = (color + 1) % 64;
+        x += dx;
+        y += dy;
+        color = (color + 1) % 64;
     }
 }
