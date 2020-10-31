@@ -1,10 +1,5 @@
 use bitfield::bitfield;
-
-#[derive(Copy, Clone, Debug)]
-pub enum SpriteSize {
-    P8x8,
-    P8x16,
-}
+use crate::ppu::sprite::*;
 
 #[derive(Copy, Clone, Debug)]
 pub enum SlaveSel {
@@ -23,7 +18,6 @@ pub const OAMDATA: usize = 4;
 pub const PPUSCROLL: usize = 5;
 pub const PPUADDR: usize = 6;
 pub const PPUDATA: usize = 7;
-// const OAMDMA: usize = 0;
 
 bitfield! {
     #[derive(Clone)]
@@ -99,9 +93,9 @@ impl Control {
 
     pub fn sprite_size(&self) -> SpriteSize {
         if self.bit_sprite_size() {
-            SpriteSize::P8x16
+            LargeSprite::SIZE
         } else {
-            SpriteSize::P8x8
+            SmallSprite::SIZE
         }
     }
 

@@ -3,6 +3,7 @@
 #![allow(dead_code)] // TODO: remove this once
 
 mod registers;
+mod sprite;
 
 use crate::cartridge::*;
 use crate::common::*;
@@ -38,20 +39,33 @@ pub struct PPU<'a> {
     renderer: Option<Renderer>,
     cartridge: Option<&'a Cartridge>,
 
+    // background registers
     control: Control,
     mask: Mask,
     state: RefCell<Internal>,
     oam_addr: u8,
-    oam_data: [u8; 0x100],
     v_addr: VRAMAddr,
     t_addr: VRAMAddr,
     x_scroll: u8,
+    bg_pat_tbl: [u16; 2],
+    pal_attr: [u8; 2],
+
+    // sprite registers
+    oam_data: [u8; PPU::OAM_SIZE],
+    secondary_oam: [u8; 32],
+    sprite_pat_tbl: [u8; 8],
+    sprite_latch: [bool; 8],
+    sprite_counter: [u8; 8],
 
     cycle: u32,
     scanline: u32,
 }
 
 impl<'a> PPU<'a> {
+    // The OAM (Object Attribute Memory) is internal memory inside 
+    // the PPU that contains a display list of up to 64 sprites, where 
+    // each sprite's information occupies 4 bytes.
+    const OAM_SIZE: usize = 0x100;
     const NUM_REGS: usize = 9;
 
     pub fn new() -> PPU<'a> {
@@ -62,10 +76,18 @@ impl<'a> PPU<'a> {
             mask: Mask(0),
             state: Internal::new(),
             oam_addr: 0,
-            oam_data: [0; 256],
+            secondary_oam: [0; 32],
+            oam_data: [0; PPU::OAM_SIZE],
             v_addr: VRAMAddr(0),
             t_addr: VRAMAddr(0),
             x_scroll: 0,
+
+            bg_pat_tbl: [0; 2],
+            pal_attr: [0; 2],
+
+            sprite_pat_tbl: [0; 8],
+            sprite_latch: [false; 8],
+            sprite_counter: [0; 8],
 
             cycle: 0,
             scanline: 0,
@@ -80,8 +102,81 @@ impl<'a> PPU<'a> {
         Ok(())
     }
 
+    fn scanline(&mut self) {
+        // 1. clear list of sprites to draw
+        // 2. read through OAM, choose first 8 sprites to render
+        // 3. set sprite overflow for > 8 sprites
+        // 4. actually draw the sprites
+
+        if self.clock_cycle() {
+            self.scanline = (self.scanline + 1) % 262;
+        }
+    }
+
+    // If the sprite has foreground priority or the BG pixel is zero, the sprite
+    // pixel is output. 
+    // If the sprite has background priority and the BG pixel is nonzero, the BG
+    // pixel is output
+    fn mux_pixel(&mut self, bg: u8, sprite: u8) -> u8 { 0 }
+    
+    // OAM data is made up of byte
+    //   0) Y pos of top of sprite (plus 1, need to sub 1)
+    //   1) index number
+    //      8x8: tile number within the pattern table PPUCTRL[3]
+    //      76543210
+    //      ||||||||
+    //      |||||||+- Bank ($0000 or $1000) of tiles
+    //      +++++++-- Tile number of top of sprite (0 to 254; 
+    //                bottom half gets the next tile)
+    //   2) 76543210
+    //      ||||||||
+    //      ||||||++- Palette (4 to 7) of sprite
+    //      |||+++--- Unimplemented
+    //      ||+------ Priority (0: in front of background; 
+    //                          1: behind background)
+    //      |+------- Flip sprite horizontally
+    //      +-------- Flip sprite vertically
+    //   3) X position of left side of sprite.
+    fn clock_cycle(&mut self) -> bool {
+        let mut n = 0;
+
+        // Every cycle, a bit is fetched from the 4 background shift registers
+        // in order to create a pixel on screen. Exactly which bit is fetched
+        // depends on the fine X scroll, set by $2005
+
+        // Every 8 cycles/shifts, new data is loaded into these registers.
+
+        // Every cycle, the 8 x-position counters for the sprites are
+        // decremented by one. If the counter is zero, 
+        //      - the sprite becomes "active", and the respective pair of shift
+        //      registers for the sprite is shifted once every cycle. This output
+        //      accompanies the data in the sprite's latch, to form a pixel. 
+        //      - current pixel for each "active" sprite is checked (from highest
+        //      to lowest priority), and the first non-transparent pixel moves
+        //      on to a multiplexer, where it joins the BG pixel.
+      
+        if self.cycle > 64 && self.cycle < 257 {
+            match self.cycle % 2 {
+                0 => {
+                    // Even cycle, write data to secondary oam unless full, then read
+                },
+                1 => {
+                    // Odd cycle, read data from primary oam
+                },
+                _ => unreachable!(),
+            }
+        }
+
+        self.cycle = (self.cycle + 1) % 341;
+        self.cycle == 0
+    }
+
     fn read_oam(&self) -> u8 {
-        0
+        if self.cycle < 65 {
+            0xFF
+        } else {
+            0
+        }
     }
 
     fn write_oam(&mut self, val: u8) {}
@@ -132,7 +227,6 @@ impl<'a> PPU<'a> {
     }
 }
 
-// TODO: match against each of the registers
 impl Writeable for PPU<'_> {
     fn write(&mut self, addr: usize, val: u8) {
         match addr % PPU::NUM_REGS {
@@ -178,7 +272,5 @@ impl Clocked for PPU<'_> {
             self.oam_addr = 0;
         }
 
-        self.cycle = (self.cycle + 1) % 341;
-        self.scanline = (self.scanline + 1) % 262;
     }
 }
