@@ -272,20 +272,22 @@ impl Writeable for PPU<'_> {
     }
 }
 
-// TODO: match against each of the registers
+// TODO: without comments causes failure due to missing implementation
 impl Readable for PPU<'_> {
     fn read(&self, addr: usize) -> u8 {
-        match addr % PPU::NUM_REGS {
-            PPUCTRL => panic!("PPUCTRL unreadable!"),
-            PPUMASK => panic!("PPUMASK unreadable!"),
-            PPUSTATUS => self.read_status(),
-            OAMADDR => panic!("OAMADDR unreadable!"),
-            OAMDATA => self.read_oam(),
-            PPUSCROLL => panic!("PPUSCROLL unreadable!"),
-            PPUADDR => panic!("PPUADDR unreadable!"),
-            PPUDATA => self.read_vram(),
-            _ => unreachable!(),
-        }
+        return 0;
+
+        // match addr % PPU::NUM_REGS {
+        //     PPUCTRL => panic!("PPUCTRL unreadable!"),
+        //     PPUMASK => panic!("PPUMASK unreadable!"),
+        //     PPUSTATUS => self.read_status(),
+        //     OAMADDR => panic!("OAMADDR unreadable!"),
+        //     OAMDATA => self.read_oam(),
+        //     PPUSCROLL => panic!("PPUSCROLL unreadable!"),
+        //     PPUADDR => panic!("PPUADDR unreadable!"),
+        //     PPUDATA => self.read_vram(),
+        //     _ => unreachable!(),
+        // }
     }
 }
 
