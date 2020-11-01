@@ -50,11 +50,13 @@ pub struct PPU<'a> {
     bg_pat_tbl: [u16; 2],
     pal_attr: [u8; 2],
 
-    // sprite registers
+    // sprite registers. TODO These should be stored in the sprite struct I think, at least the
+    // sprite_* ones, then the oam should actually just be a
+    //    [Option<Sprite>; 64]
     oam_data: [u8; PPU::OAM_SIZE],
     secondary_oam: [u8; 32],
-    sprite_pat_tbl: [u8; 8],
-    sprite_latch: [bool; 8],
+    sprite_pat_tbl: [u16; 8],
+    sprite_attr: [u8; 8],
     sprite_counter: [u8; 8],
 
     cycle: u32,
@@ -86,7 +88,7 @@ impl<'a> PPU<'a> {
             pal_attr: [0; 2],
 
             sprite_pat_tbl: [0; 8],
-            sprite_latch: [false; 8],
+            sprite_attr: [0; 8],
             sprite_counter: [0; 8],
 
             cycle: 0,
@@ -108,9 +110,7 @@ impl<'a> PPU<'a> {
         // 3. set sprite overflow for > 8 sprites
         // 4. actually draw the sprites
 
-        if self.clock_cycle() {
-            self.scanline = (self.scanline + 1) % 262;
-        }
+        self.scanline = (self.scanline + 1) % 262;
     }
 
     // If the sprite has foreground priority or the BG pixel is zero, the sprite
@@ -137,7 +137,7 @@ impl<'a> PPU<'a> {
     //      |+------- Flip sprite horizontally
     //      +-------- Flip sprite vertically
     //   3) X position of left side of sprite.
-    fn clock_cycle(&mut self) -> bool {
+    fn clock_cycle(&mut self) {
         let mut n = 0;
 
         // Every cycle, a bit is fetched from the 4 background shift registers
@@ -167,8 +167,33 @@ impl<'a> PPU<'a> {
             }
         }
 
+        match self.scanline {
+            0..=239 => {
+                match self.cycle {
+                    0 => {}, // idle
+                    1..=256 => {
+                        // data fetching, TODO should this be using vram_read?
+                    },
+                    257..=320 => {
+                        // fetch sprite tile data
+                    },
+                    321..=336 => {
+                        // fetch firt two tiles for next scanline
+                    },
+                    337..=340 => {
+                        // fetch unknown nametable bytes
+                    },
+                    _ => unreachable!("cycle overflow!"),
+                }
+            },
+            240 => {},
+            241..=260 => {
+            },
+            261 => {},
+            _ => unreachable!("scanline overflow!"),
+        }
+
         self.cycle = (self.cycle + 1) % 341;
-        self.cycle == 0
     }
 
     fn read_oam(&self) -> u8 {
