@@ -11,6 +11,7 @@ use crate::graphics::*;
 use crate::memory::*;
 use crate::sdl_interface::*;
 use registers::*;
+use sprite::*;
 
 use std::cell::RefCell;
 
@@ -59,13 +60,15 @@ pub struct PPU<'a> {
     sprite_attr: [u8; 8],
     sprite_counter: [u8; 8],
 
+    scanline_data: [u8; 256],
+
     cycle: u32,
-    scanline: u32,
+    scanline: i32,
 }
 
 impl<'a> PPU<'a> {
-    // The OAM (Object Attribute Memory) is internal memory inside 
-    // the PPU that contains a display list of up to 64 sprites, where 
+    // The OAM (Object Attribute Memory) is internal memory inside
+    // the PPU that contains a display list of up to 64 sprites, where
     // each sprite's information occupies 4 bytes.
     const OAM_SIZE: usize = 0x100;
     const NUM_REGS: usize = 9;
@@ -91,6 +94,8 @@ impl<'a> PPU<'a> {
             sprite_attr: [0; 8],
             sprite_counter: [0; 8],
 
+            scanline_data: [0; 256],
+
             cycle: 0,
             scanline: 0,
         }
@@ -104,21 +109,57 @@ impl<'a> PPU<'a> {
         Ok(())
     }
 
-    fn scanline(&mut self) {
+    // If the sprite has foreground priority or the BG pixel is zero, the sprite
+    // pixel is output.
+    // If the sprite has background priority and the BG pixel is nonzero, the BG
+    // pixel is output
+    fn mux_pixel(&mut self, bg: u8, sprite: u8) -> u8 {
+        0
+    }
+
+    fn do_scanline(&mut self) {
         // 1. clear list of sprites to draw
         // 2. read through OAM, choose first 8 sprites to render
         // 3. set sprite overflow for > 8 sprites
         // 4. actually draw the sprites
 
-        self.scanline = (self.scanline + 1) % 262;
+        // TODO For cycle accurate...
+        // match self.scanline {
+        //     0..=239 => {
+        //         match self.cycle {
+        //             0 => {} // idle
+        //             1..=256 => {
+        //                 // data fetching, TODO should this be using vram_read?
+        //             }
+        //             257..=320 => {
+        //                 // fetch sprite tile data
+        //             }
+        //             321..=336 => {
+        //                 // fetch firt two tiles for next scanline
+        //             }
+        //             337..=340 => {
+        //                 // fetch unknown nametable bytes
+        //             }
+        //             _ => unreachable!("cycle overflow!"),
+        //         }
+        //     }
+        //     240 => {}
+        //     241..=260 => {}
+        //     261 => {}
+        //     _ => unreachable!("scanline overflow!"),
+        // }
+        match self.renderer.as_mut() {
+            Some(r) => r.render(self.scanline, &self.scanline_data),
+            None => {
+                let mut r = Renderer::new().unwrap();
+                let res = r.render(self.scanline, &self.scanline_data);
+                self.renderer = Some(r);
+                res
+            }
+        }
+        .unwrap();
     }
 
-    // If the sprite has foreground priority or the BG pixel is zero, the sprite
-    // pixel is output. 
-    // If the sprite has background priority and the BG pixel is nonzero, the BG
-    // pixel is output
-    fn mux_pixel(&mut self, bg: u8, sprite: u8) -> u8 { 0 }
-    
     // OAM data is made up of byte
     //   0) Y pos of top of sprite (plus 1, need to sub 1)
     //   1) index number
@@ -126,18 +167,18 @@ impl<'a> PPU<'a> {
     //      76543210
     //      ||||||||
     //      |||||||+- Bank ($0000 or $1000) of tiles
-    //      +++++++-- Tile number of top of sprite (0 to 254; 
+    //      +++++++-- Tile number of top of sprite (0 to 254;
     //                bottom half gets the next tile)
     //   2) 76543210
     //      ||||||||
     //      ||||||++- Palette (4 to 7) of sprite
     //      |||+++--- Unimplemented
-    //      ||+------ Priority (0: in front of background; 
+    //      ||+------ Priority (0: in front of background;
     //                          1: behind background)
     //      |+------- Flip sprite horizontally
     //      +-------- Flip sprite vertically
     //   3) X position of left side of sprite.
-    fn clock_cycle(&mut self) {
+    fn do_cycle(&mut self) {
         let mut n = 0;
 
         // Every cycle, a bit is fetched from the 4 background shift registers
@@ -147,53 +188,53 @@ impl<'a> PPU<'a> {
         // Every 8 cycles/shifts, new data is loaded into these registers.
 
         // Every cycle, the 8 x-position counters for the sprites are
-        // decremented by one. If the counter is zero, 
+        // decremented by one. If the counter is zero,
         //      - the sprite becomes "active", and the respective pair of shift
         //      registers for the sprite is shifted once every cycle. This output
-        //      accompanies the data in the sprite's latch, to form a pixel. 
+        //      accompanies the data in the sprite's latch, to form a pixel.
         //      - current pixel for each "active" sprite is checked (from highest
         //      to lowest priority), and the first non-transparent pixel moves
         //      on to a multiplexer, where it joins the BG pixel.
-      
+
+        let x_pix = self.cycle - 2;
+        let y_pix = self.scanline;
+
+        // render sprites, reading from the primary oam
+        for sprite in self
+            .oam_data
+            .chunks(Sprite::BYTES_PER)
+            .map(|data| Sprite::from(data))
+        {
+            let addr = match self.control.sprite_size() {
+                Size::Small => sprite.addr() + self.control.sprite_table_addr(),
+                Size::Large => sprite.addr() + sprite.table_addr(),
+            };
+
+            let cart = self.cartridge.as_ref().expect("no cartridge loaded!");
+            let colors = cart.chr_read(addr) | (cart.chr_read(addr + 8) << 1);
+            if colors == 0 {
+                // transparent sprite
+                continue;
+            }
+        }
+
         if self.cycle > 64 && self.cycle < 257 {
             match self.cycle % 2 {
                 0 => {
                     // Even cycle, write data to secondary oam unless full, then read
-                },
+                }
                 1 => {
                     // Odd cycle, read data from primary oam
-                },
+                }
                 _ => unreachable!(),
             }
         }
 
-        match self.scanline {
-            0..=239 => {
-                match self.cycle {
-                    0 => {}, // idle
-                    1..=256 => {
-                        // data fetching, TODO should this be using vram_read?
-                    },
-                    257..=320 => {
-                        // fetch sprite tile data
-                    },
-                    321..=336 => {
-                        // fetch firt two tiles for next scanline
-                    },
-                    337..=340 => {
-                        // fetch unknown nametable bytes
-                    },
-                    _ => unreachable!("cycle overflow!"),
-                }
-            },
-            240 => {},
-            241..=260 => {
-            },
-            261 => {},
-            _ => unreachable!("scanline overflow!"),
-        }
-
+        self.do_scanline();
         self.cycle = (self.cycle + 1) % 341;
+        if self.cycle == 0 {
+            self.scanline = (self.scanline + 1) % 262;
+        }
     }
 
     fn read_oam(&self) -> u8 {
@@ -235,11 +276,15 @@ impl<'a> PPU<'a> {
     }
 
     fn write_vram(&mut self, val: u8) {
-        self.cartridge.unwrap().chr_write(self.v_addr.read() as usize, val);
+        self.cartridge
+            .unwrap()
+            .chr_write(self.v_addr.read() as usize, val);
     }
 
     fn read_vram(&self) -> u8 {
-        self.cartridge.unwrap().chr_read(self.v_addr.read() as usize)
+        self.cartridge
+            .unwrap()
+            .chr_read(self.v_addr.read() as usize)
     }
 
     fn read_status(&self) -> u8 {
@@ -277,17 +322,17 @@ impl Readable for PPU<'_> {
     fn read(&self, addr: usize) -> u8 {
         return 0;
 
-        // match addr % PPU::NUM_REGS {
-        //     PPUCTRL => panic!("PPUCTRL unreadable!"),
-        //     PPUMASK => panic!("PPUMASK unreadable!"),
-        //     PPUSTATUS => self.read_status(),
-        //     OAMADDR => panic!("OAMADDR unreadable!"),
-        //     OAMDATA => self.read_oam(),
-        //     PPUSCROLL => panic!("PPUSCROLL unreadable!"),
-        //     PPUADDR => panic!("PPUADDR unreadable!"),
-        //     PPUDATA => self.read_vram(),
-        //     _ => unreachable!(),
-        // }
+        match addr % PPU::NUM_REGS {
+            PPUCTRL => panic!("PPUCTRL unreadable!"),
+            PPUMASK => panic!("PPUMASK unreadable!"),
+            PPUSTATUS => self.read_status(),
+            OAMADDR => panic!("OAMADDR unreadable!"),
+            OAMDATA => self.read_oam(),
+            PPUSCROLL => panic!("PPUSCROLL unreadable!"),
+            PPUADDR => panic!("PPUADDR unreadable!"),
+            PPUDATA => self.read_vram(),
+            _ => unreachable!(),
+        }
     }
 }
 
@@ -298,6 +343,5 @@ impl Clocked for PPU<'_> {
         if self.cycle > 256 && self.cycle < 321 {
             self.oam_addr = 0;
         }
-
     }
 }

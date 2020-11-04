@@ -22,10 +22,8 @@ mod vnes;
 pub use vnes::VNES;
 
 pub mod graphics {
-    pub use super::sdl_interface::graphics::Coordinates;
     pub use super::sdl_interface::graphics::Renderer;
-    pub use super::sdl_interface::graphics::Texture;
-    pub const FRAME_RATE_NS: u32 = 1_000_000_000 / 60;
+    pub const FRAME_RATE_NS: u32 = 1_000_000_000 / 60 / 241;
 }
 
 pub mod audio {}

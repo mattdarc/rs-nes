@@ -1,5 +1,5 @@
+use super::*;
 use bitfield::bitfield;
-use crate::ppu::sprite::*;
 
 #[derive(Copy, Clone, Debug)]
 pub enum SlaveSel {
@@ -91,11 +91,11 @@ impl Control {
         }
     }
 
-    pub fn sprite_size(&self) -> SpriteSize {
+    pub fn sprite_size(&self) -> sprite::Size {
         if self.bit_sprite_size() {
-            LargeSprite::SIZE
+            sprite::Size::Large
         } else {
-            SmallSprite::SIZE
+            sprite::Size::Small
         }
     }
 
