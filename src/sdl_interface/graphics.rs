@@ -4,6 +4,8 @@ use sdl2::pixels::{Color, PixelFormatEnum};
 use sdl2::rect::Rect;
 use sdl2::render::{TextureAccess, WindowCanvas};
 use sdl2::surface::Surface;
+use std::mem::size_of;
+use std::slice::from_raw_parts;
 
 const PALETTE_TABLE: [u32; 64] = [
     0x7C7C7C, 0x0000FC, 0x0000BC, 0x4428BC, 0x940084, 0xA80020, 0xA81000, 0x881400,
@@ -17,8 +19,28 @@ const PALETTE_TABLE: [u32; 64] = [
 ];
 
 const BLOCK_SIZE: u32 = 8; // 8x8 tile
-const BYTES_PER_PIX: u32 = 4; // RGB888 rounds up to word
+const BYTES_PER_PIX: u32 = (size_of::<u32>() / size_of::<u8>()) as u32; // RGB888 rounds up to word
+
 const WINDOW_NAME: &str = "Venus NES Emulator";
+
+// TODO these should not be constant, and should be able to be resized with the emulator screen
+const WINDOW_WIDTH_MUL: u32 = 4;
+const WINDOW_HEIGHT_MUL: u32 = 3;
+const WINDOW_WIDTH: u32 = NES_SCREEN_WIDTH * WINDOW_WIDTH_MUL;
+const WINDOW_HEIGHT: u32 = NES_SCREEN_HEIGHT * WINDOW_HEIGHT_MUL;
+
+pub const NES_SCREEN_WIDTH: u32 = 256;
+pub const NES_SCREEN_HEIGHT: u32 = 240;
+
+// This is safe since I know that the underlying data is valid and contiguous
+fn to_sdl2_slice(slice: &[u32]) -> &[u8] {
+    unsafe {
+        from_raw_parts(
+            slice.as_ptr() as *const u8,
+            slice.len() * BYTES_PER_PIX as usize,
+        )
+    }
+}
 
 pub struct Renderer {
     canvas: WindowCanvas,
@@ -29,7 +51,7 @@ impl Renderer {
         let video_subsystem = SDL2Intrf::context().video()?;
 
         let window = video_subsystem
-            .window(WINDOW_NAME, 800, 600)
+            .window(WINDOW_NAME, WINDOW_WIDTH, WINDOW_HEIGHT)
             .position_centered()
             .build()?;
 
@@ -38,7 +60,7 @@ impl Renderer {
         Ok(Renderer { canvas })
     }
 
-    // TODO: May need top find a way to batch these together, or clear() only
+    // TODO: May need to find a way to batch these together, or clear() only
     // when the screen needs to be updated
     pub fn render(
         &mut self, row: i32, scanline: &[u8],
@@ -48,7 +70,6 @@ impl Renderer {
             .iter()
             .map(|c| PALETTE_TABLE[*c as usize])
             .collect();
-        // canvas.clear();
 
         let creator = canvas.texture_creator();
 
@@ -60,8 +81,17 @@ impl Renderer {
             line_size,
             1,
         )?;
-        texture.update(None, scanline, (line_size * BYTES_PER_PIX) as usize)?;
-        let dst_rect = Rect::new(0, row, 800, 1);
+        texture.update(
+            None,
+            to_sdl2_slice(&line),
+            (line_size * BYTES_PER_PIX) as usize,
+        )?;
+        let dst_rect = Rect::new(
+            0,
+            WINDOW_HEIGHT_MUL as i32 * row,
+            WINDOW_WIDTH,
+            WINDOW_HEIGHT_MUL,
+        );
         canvas.copy(&texture, None, Some(dst_rect))?;
         canvas.present();
         Ok(SDL2Intrf::context().event_pump()?)
@@ -73,3 +103,9 @@ impl Clone for Renderer {
         Renderer::new().unwrap()
     }
 }
+
+// impl Drop for Renderer {
+//     fn drop(&mut self) {
+//         println!("Screen {:#X?}", &self.screen);
+//     }
+// }

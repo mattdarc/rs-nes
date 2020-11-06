@@ -23,7 +23,7 @@ fn main() {
         }
         ::std::thread::sleep(Duration::new(0, venus::graphics::FRAME_RATE_NS));
 
-        y = (y + 1) % 800;
+        y = (y + 1) % 240;
         assert!(scanline.iter().all(|x| x == &scanline[0]));
         for c in scanline.iter_mut() {
             let old = *c;
