@@ -53,6 +53,10 @@ impl Sprite {
     pub fn table_addr(&self) -> usize {
         self.bank_sel
     }
+
+    pub fn palette_num(&self) -> u8 {
+        self.palette_num
+    }
 }
 
 impl std::convert::From<&[u8]> for Sprite {
@@ -62,8 +66,10 @@ impl std::convert::From<&[u8]> for Sprite {
         let y = bytes[0];
         let bank_sel = if bytes[1] & 0x1 != 0 { 0x1000 } else { 0x0000 };
         let tile_num = bytes[1] & 0xFE;
-        let palette_num = bytes[2] & 0x3 + 4;
-        assert!(palette_num < 8);
+
+        // this is 4-7 but I am using it like an index into the palette table
+        let palette_num = (bytes[2] & 0x3) << 2;
+
         let priority = if bytes[2] & 0x20 != 0 {
             Priority::Background
         } else {

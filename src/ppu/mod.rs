@@ -199,22 +199,27 @@ impl<'a> PPU<'a> {
         let x_pix = self.cycle - 2;
         let y_pix = self.scanline;
 
-        // render sprites, reading from the primary oam
-        for sprite in self
-            .oam_data
-            .chunks(Sprite::BYTES_PER)
-            .map(|data| Sprite::from(data))
-        {
-            let addr = match self.control.sprite_size() {
-                Size::Small => sprite.addr() + self.control.sprite_table_addr(),
-                Size::Large => sprite.addr() + sprite.table_addr(),
-            };
+        // render sprites, reading from the primary oam, only if the flags are not set to hide them
+        if self.mask.show_sprites() && (x_pix > 7 || self.mask.show_left_sprites()) {
+            for sprite in self
+                .oam_data
+                .chunks(Sprite::BYTES_PER)
+                .map(|data| Sprite::from(data))
+            {
+                let addr = match self.control.sprite_size() {
+                    Size::Small => sprite.addr() + self.control.sprite_table_addr(),
+                    Size::Large => sprite.addr() + sprite.table_addr(),
+                };
 
-            let cart = self.cartridge.as_ref().expect("no cartridge loaded!");
-            let colors = cart.chr_read(addr) | (cart.chr_read(addr + 8) << 1);
-            if colors == 0 {
-                // transparent sprite
-                continue;
+                let cart = self.cartridge.as_ref().expect("no cartridge loaded!");
+                let mut colors = vec![0; 8];
+
+                let lsb = cart.chr_read(addr);
+                let msb = cart.chr_read(addr + 8);
+                for (i, color) in colors.iter_mut().enumerate() {
+                    *color =
+                        (lsb >> i) & 1 | ((msb >> i) & 1) << 1 | sprite.palette_num();
+                }
             }
         }
 
