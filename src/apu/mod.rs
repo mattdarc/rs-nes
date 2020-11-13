@@ -1,5 +1,5 @@
 // The pulse, triangle, and noise channels each have their own length
-// counter unit. It is clocked twice per sequence, and counts down to zero
+// counter unit. It is ticked twice per sequence, and counts down to zero
 // if enabled. When the length counter reaches zero the channel is
 // silenced. It is reloaded by writing a 5-bit value to the appropriate
 // channel's length counter register, which will load a value from a lookup
@@ -17,7 +17,7 @@ mod volume;
 
 use crate::common::*;
 
-use self::counter::{Frame, FrameCounter};
+use self::counter::{Frame, FrameCounter, Sampled};
 use self::dmc::DMC;
 use self::mixer::Mixer;
 use self::noise::Noise;
@@ -70,13 +70,32 @@ impl APU {
         todo!("Handle interrupt");
     }
 
-    fn clock_frame(&mut self, frame: Frame) {
+    fn tick_frame(&mut self, frame: Frame) {
         match frame {
             Frame::Quarter => self.quarter_frame(),
             Frame::Half => self.half_frame(),
             Frame::Interrupt => self.interrupt_frame(),
             Frame::None => (),
         }
+    }
+
+    pub fn tick(&mut self) {
+        // Every tick
+        self.triangle.tick();
+        self.frame_counter.tick();
+
+        // Every other tick
+        if self.even_cycle {
+            self.pulse1.tick();
+            self.pulse2.tick();
+            self.noise.tick();
+            self.dmc.tick();
+        }
+
+        let frame_number = self.frame_counter.get_number();
+        self.tick_frame(frame_number);
+
+        self.even_cycle = !self.even_cycle;
     }
 }
 
@@ -140,32 +159,11 @@ impl Writeable for APU {
             }
             0x4017 => {
                 let frame_number = self.frame_counter.set_control(val);
-                self.clock_frame(frame_number);
+                self.tick_frame(frame_number);
             }
 
             _ => unreachable!("Invalid APU address!"),
         }
-    }
-}
-
-impl Clocked for APU {
-    fn clock(&mut self) {
-        // Every clock
-        self.triangle.clock();
-        self.frame_counter.clock();
-
-        // Every other clock
-        if self.even_cycle {
-            self.pulse1.clock();
-            self.pulse2.clock();
-            self.noise.clock();
-            self.dmc.clock();
-        }
-
-        let frame_number = self.frame_counter.get_number();
-        self.clock_frame(frame_number);
-
-        self.even_cycle = !self.even_cycle;
     }
 }
 

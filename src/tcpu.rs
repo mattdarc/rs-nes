@@ -1,9 +1,12 @@
 #[allow(unused_mut)]
 use std::cell::RefCell;
 
+use crate::cartridge::*;
+use crate::common::Bus;
 use crate::cpu::*;
 use crate::instructions::AddressingMode::*;
 use crate::instructions::InstrName::*;
+use crate::memory::RAM;
 
 fn bytes(instr: &Instruction) -> u16 {
     use AddressingMode::*;
@@ -24,6 +27,45 @@ fn bytes(instr: &Instruction) -> u16 {
     }
 }
 
+struct TestBus {
+    cartridge: Option<Cartridge>,
+    ram: RAM,
+}
+
+impl TestBus {
+    pub fn init(
+        &mut self, cartridge: Cartridge,
+    ) -> Result<(), Box<dyn std::error::Error>> {
+        self.cartridge = Some(cartridge);
+        Ok(())
+    }
+
+    pub fn new() -> Self {
+        TestBus {
+            cartridge: None,
+            ram: RAM::new(0x800),
+        }
+    }
+}
+
+impl Bus for TestBus {
+    fn read(&mut self, addr: usize) -> u8 {
+        match addr {
+            0..=0x4017 => self.ram.read(addr % 0x800), // Mirroring
+            0x4018..=0xFFFF => self.cartridge.as_ref().unwrap().prg_read(addr),
+            _ => unreachable!("Invalid read from address {:#X}!", addr),
+        }
+    }
+
+    fn write(&mut self, addr: usize, val: u8) {
+        match addr {
+            0..=0x4017 => self.ram.write(addr % 0x800, val),
+            0x4018..=0xFFFF => self.cartridge.as_ref().unwrap().prg_write(addr, val),
+            _ => unreachable!("Invalid read from address {:#X}!", addr),
+        }
+    }
+}
+
 // TODO: Need to verify noop cycles
 macro_rules! verify_op {
     ($name:ident, $addr_mode:ident,
@@ -36,26 +78,30 @@ macro_rules! verify_op {
 
 	// Set up initial CPU state
 	let cartridge = RefCell::new(crate::cartridge::test::program(&[$opcode, $($b,)*]));
-	let mut cpu = Ricoh2A03::with(&cartridge);
+        let mut bus = TestBus::new();
+        let _ = bus.init(cartridge);
+	let mut cpu = Ricoh2A03::new();
 	$(cpu.$reg = $pv;)*
-	$(cpu.bus.write($addr, $val);)*
+	$(bus.write($addr, $val);)*
 
 	// Init and keep track of PC
-	    cpu.init();
+        cpu.connect(&mut bus).init();
 	let pc_bef = cpu.pc;
 
 	// Make sure we run for the correct number of no-op cycles
 	// and exit normally
-	cpu.run_for(act_instr.cycles() as usize);
+        for _ in 0..act_instr.cycles() {
+	    cpu.clock(&mut bus);
+        }
 
 	// Verify CPU state
 	assert_eq!(cpu.pc - pc_bef, bytes(&act_instr), "PC did not retrieve the correct number of bytes");
 	$(assert_eq!(cpu.$eflg, $ev);)*
-	$(assert_eq!(cpu.bus.read($exp_addr), $exp_b, "Memory at {:#X} does not match {:#}", $exp_addr, $exp_b);)*
+	$(assert_eq!(bus.read($exp_addr), $exp_b, "Memory at {:#X} does not match {:#}", $exp_addr, $exp_b);)*
 
 	// Verify one more cycle will increment the PC again
-	    let pc_bef = cpu.pc;
-	cpu.run_for(1);
+	let pc_bef = cpu.pc;
+	cpu.clock(&mut bus);
 	assert_ne!(cpu.pc, pc_bef);
     }
 }
@@ -70,22 +116,26 @@ macro_rules! verify_branch {
 	assert_eq!(act_instr.mode(), &$addr_mode, "Address mode mismatch for {:?}", &$addr_mode);
 
 	// Set up initial CPU state
+        let mut bus = TestBus::new();
+	let mut cpu = Ricoh2A03::new();
 	let cartridge = RefCell::new(crate::cartridge::test::program(&[$opcode, $($b,)*]));
-	let mut cpu = Ricoh2A03::with(&cartridge);
+        let _ = bus.init(cartridge);
 	$(cpu.$reg = $pv;)*
-	$(cpu.bus.write($addr, $val);)*
+	$(bus.write($addr, $val);)*
 
 	// Make sure we run for the correct number of no-op cycles
 	// and exit normally
-	cpu.init();
-	cpu.run_for($extra_cycles + act_instr.cycles() as usize);
+	cpu.connect(&mut bus).init();
+	for _ in 0..($extra_cycles + act_instr.cycles()) {
+            cpu.clock(&mut bus);
+        }
 
 	// Verify CPU state
 	$(assert_eq!(cpu.$eflg, $ev);)*
 
 	// Verify one more cycle will increment the PC again
 	let pc_bef = cpu.pc;
-	cpu.run_for(1);
+	cpu.clock(&mut bus);
 	assert_ne!(cpu.pc, pc_bef);
     }
 }
@@ -436,9 +486,13 @@ macro_rules! test_rom {
         fn $name() {
             let cart = Cartridge::load($rom)
                 .unwrap_or_else(|e| unreachable!("Error with \"{:?}\": {:?}", $rom, e));
-            let mut cpu = Ricoh2A03::with(&cart);
-            cpu.init();
-            cpu.run_for(10_000);
+            let mut cpu = Ricoh2A03::new();
+            let mut bus = TestBus::new();
+            let _ = bus.init(cart);
+            cpu.connect(&mut bus).init();
+            for _ in 0..10_000 {
+                cpu.clock(&mut bus);
+            }
             assert_eq!(cpu.cycle, 10_000);
         }
     };

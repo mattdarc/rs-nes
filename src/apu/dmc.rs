@@ -1,4 +1,4 @@
-use crate::common::*;
+use super::counter::*;
 
 #[derive(Default, Clone)]
 pub struct DMC {
@@ -52,10 +52,8 @@ impl DMC {
     pub fn quarter_frame(&mut self) {}
 
     pub fn half_frame(&mut self) {}
-}
 
-impl Clocked for DMC {
-    fn clock(&mut self) {}
+    pub fn tick(&mut self) {}
 }
 
 impl Sampled for DMC {

@@ -5,11 +5,8 @@
 mod registers;
 mod sprite;
 
-use crate::cartridge::*;
 use crate::common::*;
 use crate::graphics::*;
-use crate::memory::*;
-use crate::sdl_interface::*;
 use registers::*;
 use sprite::*;
 
@@ -36,10 +33,11 @@ impl Internal {
     }
 }
 
-#[derive(Clone)]
-pub struct PPU<'a> {
+const OAM_SIZE: usize = 0x100;
+const NUM_REGS: usize = 9;
+
+pub struct PPU {
     renderer: Option<Renderer>,
-    cartridge: Option<&'a Cartridge>,
 
     // background registers
     control: Control,
@@ -55,7 +53,7 @@ pub struct PPU<'a> {
     // sprite registers. TODO These should be stored in the sprite struct I think, at least the
     // sprite_* ones, then the oam should actually just be a
     //    [Option<Sprite>; 64]
-    oam_data: [u8; PPU::OAM_SIZE],
+    oam_data: [u8; OAM_SIZE],
     secondary_oam: [u8; 32],
     sprite_pat_tbl: [u16; 8],
     sprite_attr: [u8; 8],
@@ -67,23 +65,19 @@ pub struct PPU<'a> {
     scanline: i32,
 }
 
-impl<'a> PPU<'a> {
+impl PPU {
     // The OAM (Object Attribute Memory) is internal memory inside
     // the PPU that contains a display list of up to 64 sprites, where
     // each sprite's information occupies 4 bytes.
-    const OAM_SIZE: usize = 0x100;
-    const NUM_REGS: usize = 9;
-
-    pub fn new() -> PPU<'a> {
+    pub fn new() -> PPU {
         PPU {
             renderer: None,
-            cartridge: None,
             control: Control(0),
             mask: Mask(0),
             state: Internal::new(),
             oam_addr: 0,
             secondary_oam: [0; 32],
-            oam_data: [0; PPU::OAM_SIZE],
+            oam_data: [0; OAM_SIZE],
             v_addr: VRAMAddr(0),
             t_addr: VRAMAddr(0),
             x_scroll: 0,
@@ -102,11 +96,8 @@ impl<'a> PPU<'a> {
         }
     }
 
-    pub fn init(
-        &mut self, cartridge: &'a Cartridge,
-    ) -> Result<(), Box<dyn std::error::Error>> {
+    pub fn init(&mut self) -> Result<(), Box<dyn std::error::Error>> {
         self.renderer = Some(Renderer::new()?);
-        self.cartridge = Some(cartridge);
         Ok(())
     }
 
@@ -181,7 +172,7 @@ impl<'a> PPU<'a> {
     //      |+------- Flip sprite horizontally
     //      +-------- Flip sprite vertically
     //   3) X position of left side of sprite.
-    fn do_cycle(&mut self) {
+    fn do_cycle<BusType: Bus>(&mut self, bus: &mut BusType) {
         let mut n = 0;
 
         // Every cycle, a bit is fetched from the 4 background shift registers
@@ -214,7 +205,6 @@ impl<'a> PPU<'a> {
                     Size::Large => sprite.addr() + sprite.table_addr(),
                 };
 
-                let cart = self.cartridge.as_ref().expect("no cartridge loaded!");
                 let mut colors = vec![0_u8; 8];
 
                 // Determine the colors of the current row from the pattern table. Each pattern
@@ -222,8 +212,8 @@ impl<'a> PPU<'a> {
                 //     - 2 bytes per row
                 //     - 1 byte per plane per row
                 // The "left" pattern table are values less than 0x1000, while the right pattern table is >= 0x1000
-                let lsb = cart.chr_read(addr);
-                let msb = cart.chr_read(addr + 8);
+                let lsb = bus.read(addr);
+                let msb = bus.read(addr + 8);
                 for (i, color) in colors.iter_mut().enumerate() {
                     *color = (lsb >> i) & 1
                         | ((msb >> i) & 1) << 1
@@ -233,6 +223,8 @@ impl<'a> PPU<'a> {
                 // write the color to the write position in the scanline
                 self.scanline_data[x_pix as usize..(x_pix + CYCLE_STRIDE) as usize]
                     .clone_from_slice(&colors);
+
+                println!("Scanline data {:?}", &self.scanline_data);
             }
         }
 
@@ -293,18 +285,6 @@ impl<'a> PPU<'a> {
         self.state.borrow_mut().second_write = !second_write;
     }
 
-    fn write_vram(&mut self, val: u8) {
-        self.cartridge
-            .unwrap()
-            .chr_write(self.v_addr.read() as usize, val);
-    }
-
-    fn read_vram(&self) -> u8 {
-        self.cartridge
-            .unwrap()
-            .chr_read(self.v_addr.read() as usize)
-    }
-
     fn read_status(&self) -> u8 {
         let ret = self.state.borrow().status.0;
         let mut state = self.state.borrow_mut();
@@ -313,11 +293,9 @@ impl<'a> PPU<'a> {
         state.second_write = false;
         ret
     }
-}
 
-impl Writeable for PPU<'_> {
-    fn write(&mut self, addr: usize, val: u8) {
-        match addr % PPU::NUM_REGS {
+    pub fn write(&mut self, addr: usize, val: u8) {
+        match addr % NUM_REGS {
             PPUCTRL => {
                 self.control.write(val);
                 self.t_addr.nametable_sel(val.into());
@@ -328,19 +306,18 @@ impl Writeable for PPU<'_> {
             OAMDATA => self.write_oam(val),
             PPUSCROLL => self.write_scroll(val),
             PPUADDR => self.write_ppu_addr(val),
-            PPUDATA => self.write_vram(val),
+            //PPUDATA => bus.write(self.v_addr.read() as usize, val),
             _ => unreachable!(),
         }
         self.state.borrow_mut().status.set_low(val & 0x1F);
     }
-}
 
-// TODO: without comments causes failure due to missing implementation
-impl Readable for PPU<'_> {
-    fn read(&self, addr: usize) -> u8 {
+    // TODO: without comments causes failure due to missing implementation
+    #[allow(unreachable_code)]
+    pub fn read(&self, _addr: usize) -> u8 {
         return 0;
 
-        match addr % PPU::NUM_REGS {
+        match _addr % NUM_REGS {
             PPUCTRL => panic!("PPUCTRL unreadable!"),
             PPUMASK => panic!("PPUMASK unreadable!"),
             PPUSTATUS => self.read_status(),
@@ -348,20 +325,28 @@ impl Readable for PPU<'_> {
             OAMDATA => self.read_oam(),
             PPUSCROLL => panic!("PPUSCROLL unreadable!"),
             PPUADDR => panic!("PPUADDR unreadable!"),
-            PPUDATA => self.read_vram(),
+            //PPUDATA => bus.read(self.v_addr.read() as usize),
             _ => unreachable!(),
         }
     }
+
+    pub fn is_ppu_data(&self, addr: usize) -> bool {
+        addr % NUM_REGS == PPUDATA
+    }
+
+    pub fn vram_addr(&self) -> usize {
+        self.v_addr.read() as usize
+    }
 }
 
-impl Clocked for PPU<'_> {
-    fn clock(&mut self) {
+impl<BusType: Bus> Clocked<BusType> for PPU {
+    fn clock(&mut self, bus: &mut BusType) {
         // OAMADDR is set to 0 during each of ticks 257-320 (the sprite tile loading
         // interval) of the pre-render and visible scanlines.
         if self.cycle > 256 && self.cycle < 321 {
             self.oam_addr = 0;
         } else {
-            self.do_cycle();
+            self.do_cycle(bus);
         }
     }
 }

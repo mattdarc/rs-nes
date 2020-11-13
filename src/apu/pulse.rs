@@ -1,6 +1,5 @@
-use crate::apu::counter::{Counter, LengthCounter};
+use crate::apu::counter::{Counter, LengthCounter, Sampled};
 use crate::apu::volume::Envelope;
-use crate::common::*;
 
 #[derive(Clone)]
 enum Arithmetic {
@@ -57,7 +56,7 @@ impl Sweep {
     }
 
     fn update_tgt_period(&mut self, tmr: u16, offset: u16) -> u16 {
-        self.divider.clock();
+        self.divider.tick();
         if self.divider.has_edge() && self.enabled {
             let change = tmr >> self.shift;
             if self.negate {
@@ -89,6 +88,10 @@ impl PulseSequencer {
         }
     }
 
+    fn tick(&mut self) {
+        self.idx = (self.idx + 1) % PulseSequencer::SEQ_LEN;
+    }
+
     fn reset(&mut self) {
         self.idx = 0;
     }
@@ -102,12 +105,6 @@ impl PulseSequencer {
             4 => &PulseSequencer::SEQ_4,
             _ => unreachable!("Invalid duty cycle {}!", duty),
         }
-    }
-}
-
-impl Clocked for PulseSequencer {
-    fn clock(&mut self) {
-        self.idx = (self.idx + 1) % PulseSequencer::SEQ_LEN;
     }
 }
 
@@ -129,13 +126,6 @@ impl Sampled for Pulse {
     }
 }
 
-impl Clocked for Pulse {
-    fn clock(&mut self) {
-        self.sequencer.clock();
-        self.timer.clock();
-    }
-}
-
 impl Pulse {
     pub fn ones_complement() -> Pulse {
         Pulse {
@@ -147,6 +137,11 @@ impl Pulse {
             arithmetic_type: Arithmetic::OnesCompliment,
             enabled: true,
         }
+    }
+
+    pub fn tick(&mut self) {
+        self.sequencer.tick();
+        self.timer.tick();
     }
 
     pub fn twos_complement() -> Pulse {
@@ -201,7 +196,7 @@ impl Pulse {
             || self.timer.get_period() > 0x7FF
     }
 
-    fn clock_sweep(&mut self) {
+    fn tick_sweep(&mut self) {
         let period = self.timer.get_period();
         let offset = match self.arithmetic_type {
             Arithmetic::OnesCompliment => 1,
@@ -212,12 +207,12 @@ impl Pulse {
     }
 
     pub fn quarter_frame(&mut self) {
-        self.envelope.clock();
+        self.envelope.tick();
     }
 
     pub fn half_frame(&mut self) {
-        self.length_counter.clock();
-        self.clock_sweep();
+        self.length_counter.tick();
+        self.tick_sweep();
     }
 }
 

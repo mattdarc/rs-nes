@@ -1,15 +1,26 @@
-// Clocked trait that is called as the entry point of execution of the
-// component.  Returns true if a timer edge was hit, and the component was
-// actually executed
-pub trait Clocked {
-    fn clock(&mut self);
+// Bus trait that models the communication on the bus. An object is passed an instance of this type
+// when clocked
+pub trait Bus {
+    fn read(&mut self, addr: usize) -> u8;
+    fn write(&mut self, addr: usize, val: u8);
+
+    fn read_n(&mut self, addr: usize, n: usize) -> Vec<u8> {
+        let mut v = Vec::with_capacity(n);
+        for idx in 0..n {
+            v.push(self.read(addr + idx));
+        }
+        v
+    }
+
+    fn read16(&mut self, addr: usize) -> u16 {
+        (self.read(addr) as u16) | ((self.read(addr + 1) as u16) << 8)
+    }
 }
 
-// Sampled trait that is called to return the current value based on the
-// state of a component.
-pub trait Sampled {
-    type OutputType;
-    fn sample(&mut self) -> Self::OutputType;
+// Clocked trait that is called as the entry point of execution of the
+// component.
+pub trait Clocked<BusType: Bus> {
+    fn clock(&mut self, bus: &mut BusType);
 }
 
 // Snapshot trait that implements save and restore. An object that can be

@@ -1,6 +1,6 @@
 pub mod graphics;
 use std::mem::MaybeUninit;
-use std::sync::{Arc, Once};
+use std::sync::Once;
 
 static INIT_SDL: Once = Once::new();
 static mut SDL_CONTEXT: MaybeUninit<sdl2::Sdl> = MaybeUninit::uninit();

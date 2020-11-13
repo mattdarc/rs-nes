@@ -1,35 +1,60 @@
-use crate::apu::*;
+use crate::bus::*;
 use crate::cartridge::*;
-use crate::controller::*;
+use crate::common::*;
 use crate::cpu::*;
 use crate::ppu::*;
 
-pub struct VNES<'a> {
-    cpu: Ricoh2A03<'a>,
-    cartridge: Option<&'a Cartridge>,
+struct Clock {}
+
+impl Clock {
+    pub fn tick(&mut self) -> (bool, bool) {
+        (true, true)
+    }
 }
 
-impl<'a> VNES<'a> {
-    pub fn new() -> VNES<'a> {
+impl Clock {
+    fn new() -> Clock {
+        Clock {}
+    }
+}
+
+pub struct VNES {
+    cpu: Ricoh2A03,
+    ppu: PPU,
+    bus: NesBus,
+    clock: Clock,
+}
+
+impl VNES {
+    pub fn new() -> VNES {
         VNES {
             cpu: Ricoh2A03::new(),
-            cartridge: None,
+            ppu: PPU::new(),
+            bus: NesBus::new(),
+            clock: Clock::new(),
         }
     }
 
-    // TODO: Need a way to satisfy the borrow checker here ...  Ideally I
-    // would create the VNES, then whenever I want to load a ROM, I would
-    // just "play", but the issue is that the compiler doesn't know that I
-    // will "eject" the ROM before leaving this scope, guaranteeing that no
-    // memory is accessed past the lifetime
-    pub fn play(&mut self, filename: &str) -> Result<u8, std::io::Error> {
-        // let mut cartridge = Cartridge::load(filename)?;
-        // self.cartridge = Some(&cartridge);
-        // self.cpu.insert(&cartridge);
-        // self.cpu.init();
-        // let ret = self.cpu.run();
-        // self.cpu.exit();
-        // self.cartridge = None;
+    pub fn load(&mut self, filename: &str) -> Result<u8, std::io::Error> {
+        let cartridge = Cartridge::load(filename)?;
+        self.bus.init(cartridge).expect("Error loading cartridge");
+        self.cpu.connect(&mut self.bus).init();
         Ok(0)
+    }
+
+    pub fn play(&mut self) {
+        while !self.cpu.done() {
+            let (cpu_tick, ppu_tick) = self.clock.tick();
+
+            if cpu_tick {
+                println!("-- Clocking CPU!");
+                self.cpu.clock(&mut self.bus.connect(&mut self.ppu));
+            }
+
+            if ppu_tick {
+                println!("-- Clocking PPU!");
+                self.ppu.clock(&mut self.bus);
+            }
+        }
     }
 }

@@ -1,5 +1,4 @@
-use crate::apu::counter::{Counter, LengthCounter};
-use crate::common::*;
+use crate::apu::counter::{Counter, LengthCounter, Sampled};
 
 #[derive(Default, Clone)]
 pub struct Triangle {
@@ -22,8 +21,12 @@ impl TriangleSequencer {
         9, 10, 11, 12, 13, 14, 15,
     ];
 
-    pub fn new() -> TriangleSequencer {
+    fn new() -> TriangleSequencer {
         TriangleSequencer { current: 0 }
+    }
+
+    fn tick(&mut self) {
+        self.current = (self.current + 1) % TriangleSequencer::LUT.len() as u16;
     }
 }
 
@@ -39,9 +42,9 @@ impl Triangle {
         }
     }
 
-    pub fn clock_linear_counter(&mut self) {
+    pub fn tick_linear_counter(&mut self) {
         if !self.linear_counter.reloaded() {
-            self.linear_counter.clock();
+            self.linear_counter.tick();
         }
 
         if !self.ctrl_flag {
@@ -49,9 +52,9 @@ impl Triangle {
         }
     }
 
-    pub fn clock_sequencer(&mut self) {
+    pub fn tick_sequencer(&mut self) {
         if !self.silenced() {
-            self.sequencer.clock();
+            self.sequencer.tick();
         }
     }
 
@@ -85,23 +88,15 @@ impl Triangle {
     }
 
     pub fn quarter_frame(&mut self) {
-        self.linear_counter.clock();
+        self.linear_counter.tick();
     }
 
     pub fn half_frame(&mut self) {
-        self.length_counter.clock();
+        self.length_counter.tick();
     }
-}
 
-impl Clocked for Triangle {
-    fn clock(&mut self) {
-        self.timer.clock();
-    }
-}
-
-impl Clocked for TriangleSequencer {
-    fn clock(&mut self) {
-        self.current = (self.current + 1) % TriangleSequencer::LUT.len() as u16;
+    pub fn tick(&mut self) {
+        self.timer.tick();
     }
 }
 

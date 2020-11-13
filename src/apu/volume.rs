@@ -1,5 +1,4 @@
-use crate::apu::counter::Counter;
-use crate::common::{Clocked, Sampled};
+use crate::apu::counter::{Counter, Sampled};
 
 #[derive(Default, Clone)]
 pub struct Envelope {
@@ -31,14 +30,12 @@ impl Envelope {
     pub fn reset(&mut self) {
         self.divider.set_reload();
     }
-}
 
-impl Clocked for Envelope {
-    fn clock(&mut self) {
+    pub fn tick(&mut self) {
         if !self.start {
-            self.divider.clock();
+            self.divider.tick();
             if self.divider.has_edge() {
-                self.decay.clock();
+                self.decay.tick();
             }
         } else {
             self.start = false;

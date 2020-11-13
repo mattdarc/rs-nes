@@ -66,11 +66,17 @@ impl Noise {
     }
 
     pub fn quarter_frame(&mut self) {
-        self.envelope.clock();
+        self.envelope.tick();
     }
 
     pub fn half_frame(&mut self) {
-        self.length_counter.clock();
+        self.length_counter.tick();
+    }
+
+    pub fn tick(&mut self) {
+        if self.timer.has_edge() {
+            self.lfsr.tick();
+        }
     }
 }
 
@@ -82,20 +88,18 @@ impl LFShiftRegister {
         }
     }
 
+    pub fn tick(&mut self) {
+        let shift = ternary!(self.mode_flag; 6, 1);
+        let feedback = ((self.value >> shift) & 0x1) ^ (self.value & 0x1);
+        self.value = ((self.value >> 1) & 0x4FFF) | (feedback << 14);
+    }
+
     fn set_mode(&mut self, mode: bool) {
         self.mode_flag = mode;
     }
 
     fn lsb_set(&self) -> bool {
         (self.value & 0x1) != 0
-    }
-}
-
-impl Clocked for Noise {
-    fn clock(&mut self) {
-        if self.timer.has_edge() {
-            self.lfsr.clock();
-        }
     }
 }
 
@@ -107,14 +111,6 @@ impl Sampled for Noise {
         } else {
             0
         }
-    }
-}
-
-impl Clocked for LFShiftRegister {
-    fn clock(&mut self) {
-        let shift = ternary!(self.mode_flag; 6, 1);
-        let feedback = ((self.value >> shift) & 0x1) ^ (self.value & 0x1);
-        self.value = ((self.value >> 1) & 0x4FFF) | (feedback << 14);
     }
 }
 

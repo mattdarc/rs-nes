@@ -1,4 +1,9 @@
-use crate::common::Clocked;
+// Sampled trait that is called to return the current value based on the
+// state of a component.
+pub trait Sampled {
+    type OutputType;
+    fn sample(&mut self) -> Self::OutputType;
+}
 
 #[derive(Debug, PartialEq)]
 pub enum Frame {
@@ -74,6 +79,18 @@ impl Counter {
     pub fn has_edge(&self) -> bool {
         self.current == self.period
     }
+
+    pub fn tick(&mut self) {
+        if self.reload {
+            self.current = self.period;
+        } else if self.current == 0 {
+            if self.loop_flag {
+                self.current = self.period;
+            }
+        } else {
+            self.current -= 1;
+        }
+    }
 }
 
 impl Default for Counter {
@@ -120,6 +137,12 @@ impl LengthCounter {
 
     pub fn has_edge(&self) -> bool {
         self.counter.has_edge()
+    }
+
+    pub fn tick(&mut self) {
+        if !self.silenced() && !self.halt {
+            self.counter.tick();
+        }
     }
 }
 
@@ -170,32 +193,8 @@ impl FrameCounter {
             }
         }
     }
-}
 
-impl Clocked for LengthCounter {
-    fn clock(&mut self) {
-        if !self.silenced() && !self.halt {
-            self.counter.clock();
-        }
-    }
-}
-
-impl Clocked for Counter {
-    fn clock(&mut self) {
-        if self.reload {
-            self.current = self.period;
-        } else if self.current == 0 {
-            if self.loop_flag {
-                self.current = self.period;
-            }
-        } else {
-            self.current -= 1;
-        }
-    }
-}
-
-impl Clocked for FrameCounter {
-    fn clock(&mut self) {
+    pub fn tick(&mut self) {
         if self.counter == self.period {
             self.counter = 0;
         } else {
@@ -216,10 +215,10 @@ mod tests {
         assert_eq!(counter.get_period(), period);
 
         let mut decr = 1;
-        counter.clock();
+        counter.tick();
         while !counter.has_edge() {
             assert_eq!(counter.get_count(), period - decr);
-            counter.clock();
+            counter.tick();
             decr += 1;
         }
         assert_eq!(decr, period + 1);
@@ -228,7 +227,7 @@ mod tests {
         decr = 1;
         counter.set_loop(false);
         while counter.get_count() != 0 {
-            counter.clock();
+            counter.tick();
             assert_eq!(counter.get_count(), period - decr);
             decr += 1;
         }
@@ -239,7 +238,7 @@ mod tests {
 
         counter.set_reload();
         assert_eq!(counter.get_count(), 0);
-        counter.clock();
+        counter.tick();
         assert_eq!(counter.get_count(), period);
     }
 
@@ -250,13 +249,13 @@ mod tests {
         assert_eq!(len_counter.silenced(), false);
 
         len_counter.set_halt(true);
-        len_counter.clock();
+        len_counter.tick();
         assert_eq!(len_counter.counter.get_count(), period);
 
         len_counter.disable();
         assert_eq!(len_counter.silenced(), true);
 
-        len_counter.clock();
+        len_counter.tick();
         assert_eq!(len_counter.silenced(), true);
     }
 
@@ -265,32 +264,32 @@ mod tests {
         let mut frm_ctr = FrameCounter::new();
         assert_eq!(frm_ctr.get_number(), Frame::Quarter);
 
-        frm_ctr.clock();
+        frm_ctr.tick();
         assert_eq!(frm_ctr.get_number(), Frame::Half);
 
-        frm_ctr.clock();
+        frm_ctr.tick();
         assert_eq!(frm_ctr.get_number(), Frame::Quarter);
 
-        frm_ctr.clock();
+        frm_ctr.tick();
         assert_eq!(frm_ctr.get_number(), Frame::Interrupt);
 
-        frm_ctr.clock();
+        frm_ctr.tick();
         assert_eq!(frm_ctr.get_number(), Frame::Quarter);
 
         // Change to the next mode (end of cycle)
         frm_ctr.set_control(1 << FrameCounter::MODE_BIT);
         assert_eq!(frm_ctr.get_number(), Frame::Quarter);
 
-        frm_ctr.clock();
+        frm_ctr.tick();
         assert_eq!(frm_ctr.get_number(), Frame::Half);
 
-        frm_ctr.clock();
+        frm_ctr.tick();
         assert_eq!(frm_ctr.get_number(), Frame::Quarter);
 
-        frm_ctr.clock();
+        frm_ctr.tick();
         assert_eq!(frm_ctr.get_number(), Frame::None);
 
-        frm_ctr.clock();
+        frm_ctr.tick();
         assert_eq!(frm_ctr.get_number(), Frame::Half);
     }
 }
