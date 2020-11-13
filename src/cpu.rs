@@ -13,17 +13,11 @@
 
 // Validation ROMs: https://wiki.nesdev.com/w/index.php/Emulator_tests#Validation_ROMs
 
-// TODO: implement a test mapper
-// Once mapper0 is done, move on to the PPU
+use crate::bus::Bus;
 
-use crate::common::*;
-
-use crate::apu::*;
 use crate::cartridge::*;
-use crate::controller::*;
+use crate::common::*;
 use crate::instructions::*;
-use crate::memory::*;
-use crate::ppu::*;
 
 #[derive(Copy, Debug, Clone, PartialEq)]
 pub struct Status {
@@ -39,7 +33,7 @@ impl Status {
     pub const OVERFLOW: u8 = 0;
 
     fn set(&mut self, bit: bool, idx: u8) {
-        println!("-- Updating bit {}", idx);
+        //println("-- Updating bit {}", idx);
         self.flags = (self.flags & !(1 << idx)) | ((bit as u8) << idx);
     }
 
@@ -79,12 +73,7 @@ pub struct Ricoh2A03<'a> {
     cycle: usize,
 
     // Memory
-    ram: RAM,
-    ppu: PPU<'a>,
-    apu: APU,
-    controller_1: Controller,
-    controller_2: Controller,
-    cartridge: Option<&'a Cartridge>,
+    bus: Bus<'a>,
 }
 
 #[inline]
@@ -97,7 +86,7 @@ fn crosses_page(src: u16, dst: u16) -> bool {
     // If the address is on a separate page, return true
     let crosses = ((src & 0xFF00) ^ (dst & 0xFF00)) != 0;
     if crosses {
-        println!("-- Crossed page");
+        //println("-- Crossed page");
     }
     crosses
 }
@@ -117,14 +106,9 @@ impl<'a> Ricoh2A03<'a> {
             cycle: 0,
             noop_cycles: 0,
 
-            ram: RAM::new(0x800),
-            cartridge: Some(cartridge),
-            ppu: PPU::new(),
-            apu: APU::default(),
-            controller_1: Controller::default(),
-            controller_2: Controller::default(),
+            bus: Bus::new(),
         };
-        cpu.ppu.init(&cartridge).unwrap();
+        cpu.bus.init(&cartridge).unwrap();
         cpu
     }
 
@@ -140,26 +124,20 @@ impl<'a> Ricoh2A03<'a> {
             cycle: 0,
             noop_cycles: 0,
 
-            ram: RAM::new(0x800),
-            ppu: PPU::new(),
-            apu: APU::default(),
-            controller_1: Controller::default(),
-            controller_2: Controller::default(),
-            cartridge: None,
+            bus: Bus::new(),
         }
     }
 
     pub fn insert(
         &mut self, cartridge: &'a Cartridge,
     ) -> Result<(), Box<dyn std::error::Error>> {
-        self.cartridge = Some(cartridge);
-        self.ppu.init(cartridge)
+        self.bus.init(cartridge)
     }
 }
 
 impl Ricoh2A03<'_> {
     pub fn init(&mut self) {
-        println!("-- INITIALIZING");
+        //println("-- INITIALIZING");
         self.reset();
     }
 
@@ -181,7 +159,6 @@ impl Ricoh2A03<'_> {
 
     pub fn exit(&mut self) {
         self.status = Status::from(0);
-        self.cartridge = None;
     }
 
     fn done(&self) -> bool {
@@ -189,45 +166,8 @@ impl Ricoh2A03<'_> {
     }
 
     fn reset(&mut self) {
-        self.pc = self.read16(RESET_VECTOR_START as usize);
-        println!("-- START VECTOR: : {:#X?}", self.pc);
-    }
-
-    fn read(&self, addr: usize) -> u8 {
-        let val = match addr {
-            0..=0x1FFF => self.ram.read(addr % 0x800), // Mirroring
-            0x2000..=0x3FFF => self.ppu.read(addr),
-            0x4016 => self.controller_1.read(0), // TODO Remove arg
-            0x4017 => self.controller_2.read(0),
-            0x4018..=0xFFFF => self.cartridge.unwrap().prg_read(addr),
-            _ => unreachable!("Invalid read from address {:#X}!", addr),
-        };
-        println!("-- Read value {:#X} from {:#X}", val, addr);
-        val
-    }
-
-    fn read_n(&self, addr: usize, n: usize) -> Vec<u8> {
-        let mut v = Vec::with_capacity(n);
-        for idx in 0..n {
-            v.push(self.read(addr + idx));
-        }
-        v
-    }
-
-    fn read16(&self, addr: usize) -> u16 {
-        (self.read(addr) as u16) | ((self.read(addr + 1) as u16) << 8)
-    }
-
-    fn write(&mut self, addr: usize, val: u8) {
-        println!("$$ Writing {:#X} to RAM {:#X}", val, addr);
-        match addr {
-            0..=0x1FFF => self.ram.write(addr % 0x800, val),
-            0x2000..=0x3FFF => self.ppu.write(addr, val),
-            0x4016 => self.controller_1.write(0, val),
-            0x4017 => self.controller_2.write(0, val),
-            0x4018..=0xFFFF => self.cartridge.unwrap().prg_write(addr, val),
-            _ => unreachable!("Invalid write {} to address {}!", val, addr),
-        }
+        self.pc = self.bus.read16(RESET_VECTOR_START as usize);
+        //println("-- START VECTOR: : {:#X?}", self.pc);
     }
 
     fn incr_pc(&mut self, v: u16) {
@@ -242,37 +182,37 @@ impl Ricoh2A03<'_> {
         use crate::instructions::AddressingMode::*;
         let ptr = self.pc as usize;
         match &addr_mode {
-            ZeroPage => self.read(ptr) as u16,
+            ZeroPage => self.bus.read(ptr) as u16,
             ZeroPageX => {
-                let low = self.read(ptr) as u16;
+                let low = self.bus.read(ptr) as u16;
                 low.wrapping_add(self.x as u16)
             }
-            ZeroPageY => (self.read(ptr) as u16).wrapping_add(self.y as u16),
-            Absolute => self.read16(ptr),
+            ZeroPageY => (self.bus.read(ptr) as u16).wrapping_add(self.y as u16),
+            Absolute => self.bus.read16(ptr),
             AbsoluteX => {
-                let base = self.read16(ptr);
+                let base = self.bus.read16(ptr);
                 let addr = base.wrapping_add(self.x as u16);
                 self.noop_cycles += crosses_page(base, addr) as u8;
                 addr
             }
             AbsoluteY => {
-                let base = self.read16(ptr);
+                let base = self.bus.read16(ptr);
                 let addr = base.wrapping_add(self.y as u16);
                 self.noop_cycles += crosses_page(base, addr) as u8;
                 addr
             }
             Indirect => {
-                let addr = self.read16(ptr) as usize;
-                println!("-- Indirect address {:#X}", addr);
-                self.read16(addr)
+                let addr = self.bus.read16(ptr) as usize;
+                //println("-- Indirect address {:#X}", addr);
+                self.bus.read16(addr)
             }
             IndirectX => {
-                let addr = self.read(ptr).wrapping_add(self.x) as usize;
-                self.read16(addr)
+                let addr = self.bus.read(ptr).wrapping_add(self.x) as usize;
+                self.bus.read16(addr)
             }
             IndirectY => {
-                let low = self.read(ptr) as usize;
-                let base = self.read16(low);
+                let low = self.bus.read(ptr) as usize;
+                let base = self.bus.read16(low);
                 let addr = base.wrapping_add(self.y as u16);
                 self.noop_cycles += crosses_page(base, addr) as u8;
                 addr
@@ -290,7 +230,7 @@ impl Ricoh2A03<'_> {
             ZeroPage | ZeroPageX | ZeroPageY | Absolute | AbsoluteX | AbsoluteY
             | Indirect | IndirectX | IndirectY => {
                 let addr = self.get_addr(mode) as usize;
-                self.write(addr, val);
+                self.bus.write(addr, val);
             }
             Accumulator => self.acc = val,
             Immediate | Relative => unreachable!("Tried to modify ROM!"),
@@ -304,10 +244,10 @@ impl Ricoh2A03<'_> {
             ZeroPage | ZeroPageX | ZeroPageY | Absolute | AbsoluteX | AbsoluteY
             | Indirect | IndirectX | IndirectY => {
                 let addr = self.get_addr(mode) as usize;
-                self.read(addr)
+                self.bus.read(addr)
             }
             Accumulator => self.acc,
-            Immediate | Relative => self.read(self.pc as usize),
+            Immediate | Relative => self.bus.read(self.pc as usize),
             Invalid => unreachable!("Invalid AddressingMode"),
         }
     }
@@ -319,21 +259,21 @@ impl Ricoh2A03<'_> {
         } else {
             self.pc.wrapping_add(dst as u16)
         };
-        println!("-- Taking branch from {:#X} to {:#X}", self.pc, pc);
+        //println("-- Taking branch from {:#X} to {:#X}", self.pc, pc);
 
         // add 1 if same page, 2 if different
         self.noop_cycles += 1 + crosses_page(self.pc, pc) as u8;
         self.pc = pc;
     }
 
-    fn peek(&self) -> u8 {
+    fn peek(&mut self) -> u8 {
         let ptr = (self.sp as u16).wrapping_add(Ricoh2A03::STACK_BEGIN) as usize;
-        self.read(ptr)
+        self.bus.read(ptr)
     }
 
     fn poke(&mut self, val: u8) {
         let ptr = (self.sp as u16).wrapping_add(Ricoh2A03::STACK_BEGIN) as usize;
-        self.write(ptr, val);
+        self.bus.write(ptr, val);
     }
 
     // Update the CPU flags based on the accumulator
@@ -462,7 +402,7 @@ impl Ricoh2A03<'_> {
     // BIT
     fn test_bits(&mut self, mode: &AddressingMode) {
         let operand = self.read_mem(mode);
-        println!("-- Test bits {} & {}", operand, self.acc);
+        //println("-- Test bits {} & {}", operand, self.acc);
         self.status.set(bit_set!(operand, 6), Status::OVERFLOW);
         self.status.set(is_negative(operand), Status::NEGATIVE);
         self.status.set((self.acc & operand) == 0, Status::ZERO);
@@ -567,9 +507,9 @@ impl Ricoh2A03<'_> {
     // JMP
     fn jump_to(&mut self, mode: &AddressingMode) {
         let addr = self.get_addr(mode) as usize;
-        println!("-- PC Destination from {:#X}", addr);
-        self.pc = self.read16(addr);
-        println!("-- Jump to {}", self.pc);
+        //println("-- PC Destination from {:#X}", addr);
+        self.pc = self.bus.read16(addr);
+        //println("-- Jump to {}", self.pc);
     }
 
     // JSR
@@ -577,7 +517,7 @@ impl Ricoh2A03<'_> {
         let pc = self.pc;
         self.push16(pc);
         let addr = self.get_addr(mode) as usize;
-        self.pc = self.read16(addr);
+        self.pc = self.bus.read16(addr);
     }
 
     // LDA
@@ -623,7 +563,7 @@ impl Ricoh2A03<'_> {
 
     // PHA
     fn push_acc(&mut self) {
-        println!("-- Pushing {} onto stack", self.acc);
+        //println("-- Pushing {} onto stack", self.acc);
         self.push8(self.acc);
     }
 
@@ -758,25 +698,25 @@ impl Clocked for Ricoh2A03<'_> {
         use crate::instructions;
         use crate::instructions::AddressingMode::*;
         use crate::instructions::InstrName::*;
-        println!("-- Starting CPU cycle {}", self.cycle);
+        //println("-- Starting CPU cycle {}", self.cycle);
 
         self.cycle += 1;
         if self.noop_cycles > 0 {
-            println!("-- Running No-Op instruction, {} left", self.noop_cycles);
+            //println("-- Running No-Op instruction, {} left", self.noop_cycles);
             self.noop_cycles -= 1;
             return;
         }
 
-        let opcode = self.read(self.pc as usize);
+        let opcode = self.bus.read(self.pc as usize);
         let instr = instructions::get_from(opcode);
         self.noop_cycles = instr.cycles() - 1; // 1 cycle we use to execute the instruction
-        println!(
-            "-- Running {:#X} {:?} from {:#X} for {} cycles",
-            opcode,
-            &instr,
-            self.pc,
-            self.noop_cycles + 1
-        );
+                                               //        println!(
+                                               //            "-- Running {:#X} {:?} from {:#X} for {} cycles",
+                                               //            opcode,
+                                               //            &instr,
+                                               //            self.pc,
+                                               //            self.noop_cycles + 1
+                                               //        );
         self.incr_pc(1);
 
         match instr.name() {
@@ -844,7 +784,7 @@ impl Clocked for Ricoh2A03<'_> {
                 let last_pc = self.pc - 1;
                 unreachable!(
                     "-- Invalid Instruction. Surrounding instructions: {:?}",
-                    self.read_n((last_pc - 2) as usize, 5)
+                    self.bus.read_n((last_pc - 2) as usize, 5)
                 );
             }
         }
@@ -862,7 +802,9 @@ impl Clocked for Ricoh2A03<'_> {
             Immediate | Relative => self.incr_pc(1),
             Accumulator | Invalid => {}
         }
-        // todo!("Need to clock everything timed by the CPU clock, but not execute instructions until the previous is fully processed");
+        // todo!("Need to clock everything timed by the CPU clock, but not execute instructions
+        // until the previous is fully processed");
+        self.bus.clock();
     }
 }
 

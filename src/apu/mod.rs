@@ -82,7 +82,7 @@ impl APU {
 
 impl Sampled for APU {
     type OutputType = i16;
-    fn sample(&self) -> Self::OutputType {
+    fn sample(&mut self) -> Self::OutputType {
         let pulse = self.pulse1.sample() + self.pulse2.sample();
         let tri = self.triangle.sample();
         let noi = self.noise.sample();

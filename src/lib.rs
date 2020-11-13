@@ -8,16 +8,18 @@ extern crate sdl2;
 #[macro_use]
 extern crate bitfield;
 
-mod apu;
-mod cartridge;
-mod controller;
-mod cpu;
-mod instructions;
-mod mapper;
-mod memory;
-mod ppu;
-mod sdl_interface;
-mod vnes;
+// TODO These should not be public
+pub mod apu;
+pub mod bus;
+pub mod cartridge;
+pub mod controller;
+pub mod cpu;
+pub mod instructions;
+pub mod mapper;
+pub mod memory;
+pub mod ppu;
+pub mod sdl_interface;
+pub mod vnes;
 
 pub use vnes::VNES;
 

@@ -107,7 +107,7 @@ impl Clocked for TriangleSequencer {
 
 impl Sampled for Triangle {
     type OutputType = u16;
-    fn sample(&self) -> Self::OutputType {
+    fn sample(&mut self) -> Self::OutputType {
         if !self.silenced() {
             self.sequencer.sample()
         } else {
@@ -118,7 +118,7 @@ impl Sampled for Triangle {
 
 impl Sampled for TriangleSequencer {
     type OutputType = u16;
-    fn sample(&self) -> Self::OutputType {
+    fn sample(&mut self) -> Self::OutputType {
         TriangleSequencer::LUT[self.current as usize] as u16
     }
 }

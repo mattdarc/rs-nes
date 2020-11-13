@@ -113,14 +113,14 @@ impl Clocked for PulseSequencer {
 
 impl Sampled for PulseSequencer {
     type OutputType = u16;
-    fn sample(&self) -> Self::OutputType {
+    fn sample(&mut self) -> Self::OutputType {
         self.seq[self.idx] as u16
     }
 }
 
 impl Sampled for Pulse {
     type OutputType = u16;
-    fn sample(&self) -> Self::OutputType {
+    fn sample(&mut self) -> Self::OutputType {
         return if !self.silenced() {
             (self.envelope.sample() * self.sequencer.sample()).into()
         } else {

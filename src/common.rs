@@ -9,7 +9,7 @@ pub trait Clocked {
 // state of a component.
 pub trait Sampled {
     type OutputType;
-    fn sample(&self) -> Self::OutputType;
+    fn sample(&mut self) -> Self::OutputType;
 }
 
 // Snapshot trait that implements save and restore. An object that can be

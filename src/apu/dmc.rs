@@ -60,7 +60,7 @@ impl Clocked for DMC {
 
 impl Sampled for DMC {
     type OutputType = u16;
-    fn sample(&self) -> Self::OutputType {
+    fn sample(&mut self) -> Self::OutputType {
         0
     }
 }

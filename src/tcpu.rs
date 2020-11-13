@@ -38,7 +38,7 @@ macro_rules! verify_op {
 	let cartridge = RefCell::new(crate::cartridge::test::program(&[$opcode, $($b,)*]));
 	let mut cpu = Ricoh2A03::with(&cartridge);
 	$(cpu.$reg = $pv;)*
-	$(cpu.write($addr, $val);)*
+	$(cpu.bus.write($addr, $val);)*
 
 	// Init and keep track of PC
 	    cpu.init();
@@ -51,7 +51,7 @@ macro_rules! verify_op {
 	// Verify CPU state
 	assert_eq!(cpu.pc - pc_bef, bytes(&act_instr), "PC did not retrieve the correct number of bytes");
 	$(assert_eq!(cpu.$eflg, $ev);)*
-	$(assert_eq!(cpu.read($exp_addr), $exp_b, "Memory at {:#X} does not match {:#}", $exp_addr, $exp_b);)*
+	$(assert_eq!(cpu.bus.read($exp_addr), $exp_b, "Memory at {:#X} does not match {:#}", $exp_addr, $exp_b);)*
 
 	// Verify one more cycle will increment the PC again
 	    let pc_bef = cpu.pc;
@@ -73,7 +73,7 @@ macro_rules! verify_branch {
 	let cartridge = RefCell::new(crate::cartridge::test::program(&[$opcode, $($b,)*]));
 	let mut cpu = Ricoh2A03::with(&cartridge);
 	$(cpu.$reg = $pv;)*
-	$(cpu.write($addr, $val);)*
+	$(cpu.bus.write($addr, $val);)*
 
 	// Make sure we run for the correct number of no-op cycles
 	// and exit normally

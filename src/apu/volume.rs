@@ -50,7 +50,7 @@ impl Clocked for Envelope {
 
 impl Sampled for Envelope {
     type OutputType = u16;
-    fn sample(&self) -> Self::OutputType {
+    fn sample(&mut self) -> Self::OutputType {
         if self.is_constant {
             self.divider.get_period()
         } else {

@@ -1,6 +1,6 @@
 // PPU implementation for rs-nes
 
-#![allow(dead_code)] // TODO: remove this once
+#![allow(dead_code)] // TODO remove this once we get to a good stopping point
 
 mod registers;
 mod sprite;
@@ -17,6 +17,7 @@ use std::cell::RefCell;
 
 pub const PPU_NUM_FRAMES: usize = 256;
 pub const PPU_NUM_SCANLINES: usize = 0;
+const CYCLE_STRIDE: u32 = 8;
 
 #[derive(Clone)]
 struct Internal {
@@ -104,7 +105,7 @@ impl<'a> PPU<'a> {
     pub fn init(
         &mut self, cartridge: &'a Cartridge,
     ) -> Result<(), Box<dyn std::error::Error>> {
-        // self.renderer = Some(Renderer::new()?);
+        self.renderer = Some(Renderer::new()?);
         self.cartridge = Some(cartridge);
         Ok(())
     }
@@ -148,6 +149,8 @@ impl<'a> PPU<'a> {
         //     261 => {}
         //     _ => unreachable!("scanline overflow!"),
         // }
+        // TODO clean this up
+        println!("Rendering scanline");
         match self.renderer.as_mut() {
             Some(r) => r.render(self.scanline, &self.scanline_data),
             None => {
@@ -196,7 +199,7 @@ impl<'a> PPU<'a> {
         //      to lowest priority), and the first non-transparent pixel moves
         //      on to a multiplexer, where it joins the BG pixel.
 
-        let x_pix = self.cycle - 2;
+        let x_pix = self.cycle;
         let y_pix = self.scanline;
 
         // render sprites, reading from the primary oam, only if the flags are not set to hide them
@@ -212,14 +215,24 @@ impl<'a> PPU<'a> {
                 };
 
                 let cart = self.cartridge.as_ref().expect("no cartridge loaded!");
-                let mut colors = vec![0; 8];
+                let mut colors = vec![0_u8; 8];
 
+                // Determine the colors of the current row from the pattern table. Each pattern
+                // table is made up of 16 bytes
+                //     - 2 bytes per row
+                //     - 1 byte per plane per row
+                // The "left" pattern table are values less than 0x1000, while the right pattern table is >= 0x1000
                 let lsb = cart.chr_read(addr);
                 let msb = cart.chr_read(addr + 8);
                 for (i, color) in colors.iter_mut().enumerate() {
-                    *color =
-                        (lsb >> i) & 1 | ((msb >> i) & 1) << 1 | sprite.palette_num();
+                    *color = (lsb >> i) & 1
+                        | ((msb >> i) & 1) << 1
+                        | (sprite.palette_num() << 2);
                 }
+
+                // write the color to the write position in the scanline
+                self.scanline_data[x_pix as usize..(x_pix + CYCLE_STRIDE) as usize]
+                    .clone_from_slice(&colors);
             }
         }
 
@@ -235,9 +248,9 @@ impl<'a> PPU<'a> {
             }
         }
 
-        self.do_scanline();
-        self.cycle = (self.cycle + 1) % 341;
+        self.cycle = (self.cycle + CYCLE_STRIDE) % 341;
         if self.cycle == 0 {
+            self.do_scanline();
             self.scanline = (self.scanline + 1) % 262;
         }
     }
@@ -347,6 +360,8 @@ impl Clocked for PPU<'_> {
         // interval) of the pre-render and visible scanlines.
         if self.cycle > 256 && self.cycle < 321 {
             self.oam_addr = 0;
+        } else {
+            self.do_cycle();
         }
     }
 }

@@ -101,7 +101,7 @@ impl Clocked for Noise {
 
 impl Sampled for Noise {
     type OutputType = u16;
-    fn sample(&self) -> Self::OutputType {
+    fn sample(&mut self) -> Self::OutputType {
         if !self.silenced() {
             self.envelope.sample()
         } else {
@@ -120,7 +120,7 @@ impl Clocked for LFShiftRegister {
 
 impl Sampled for LFShiftRegister {
     type OutputType = u16;
-    fn sample(&self) -> Self::OutputType {
+    fn sample(&mut self) -> Self::OutputType {
         self.value & 0x1
     }
 }

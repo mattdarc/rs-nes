@@ -26,8 +26,6 @@
 //
 // 44.1 kHz sample rate
 
-use std::cell::RefCell;
-
 const PI: f64 = 3.14159;
 const FS: f64 = 44_100.0; // sample rate
 
@@ -97,26 +95,23 @@ impl FilterOrd1 {
 
 #[derive(Clone, Default)]
 pub struct Mixer {
-    high_pass_90: RefCell<FilterOrd1>,
-    high_pass_440: RefCell<FilterOrd1>,
-    low_pass_14k: RefCell<FilterOrd1>,
+    high_pass_90: FilterOrd1,
+    high_pass_440: FilterOrd1,
+    low_pass_14k: FilterOrd1,
 }
 
 impl Mixer {
     pub fn new() -> Mixer {
         Mixer {
-            high_pass_90: RefCell::new(c2d!([1, 0], [1, 90], FS)),
-            high_pass_440: RefCell::new(c2d!([1, 0], [1, 440], FS)),
-            low_pass_14k: RefCell::new(c2d!([0, 14_000.0], [1, 14_000.0], FS)),
+            high_pass_90: c2d!([1, 0], [1, 90], FS),
+            high_pass_440: c2d!([1, 0], [1, 440], FS),
+            low_pass_14k: c2d!([0, 14_000.0], [1, 14_000.0], FS),
         }
     }
 
-    pub fn filter(&self, x_0: f64) -> f64 {
-        self.low_pass_14k.borrow_mut().result(
-            self.high_pass_440
-                .borrow_mut()
-                .result(self.high_pass_90.borrow_mut().result(x_0)),
-        )
+    pub fn filter(&mut self, x_0: f64) -> f64 {
+        self.low_pass_14k
+            .result(self.high_pass_440.result(self.high_pass_90.result(x_0)))
     }
 }
 
@@ -141,9 +136,9 @@ mod tests {
     #[test]
     fn filters() {
         let mixer = Mixer::new();
-        let f90 = mixer.high_pass_90.borrow();
-        let f440 = mixer.high_pass_440.borrow();
-        let f14k = mixer.low_pass_14k.borrow();
+        let f90 = mixer.high_pass_90;
+        let f440 = mixer.high_pass_440;
+        let f14k = mixer.low_pass_14k;
 
         assert_approx!(f90.b_0, 0.9936);
         assert_approx!(f90.b_1, -0.9936);
