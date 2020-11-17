@@ -18,14 +18,13 @@ pub struct Sprite {
     priority: Priority,
     vert_flip: bool,
     horiz_flip: bool,
-    size: Size,
 }
 
 impl Sprite {
     pub const BYTES_PER: usize = 4;
 
-    fn size(&self) -> (u8, u8) {
-        match &self.size {
+    fn size(size: Size) -> (u8, u8) {
+        match size {
             Size::Large => (8, 16),
             Size::Small => (8, 8),
         }
@@ -87,7 +86,6 @@ impl std::convert::From<&[u8]> for Sprite {
             priority,
             vert_flip,
             horiz_flip,
-            size: Size::Small,
         }
     }
 }
