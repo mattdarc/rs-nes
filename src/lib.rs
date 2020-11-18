@@ -8,7 +8,7 @@ extern crate sdl2;
 #[macro_use]
 extern crate bitfield;
 
-// TODO These should not be public
+// TODO These should not be public, but for testing right now they can be
 pub mod apu;
 pub mod bus;
 pub mod cartridge;

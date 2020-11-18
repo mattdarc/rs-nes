@@ -142,16 +142,12 @@ impl PPU {
         // }
         // TODO clean this up
         println!("Rendering scanline");
-        match self.renderer.as_mut() {
-            Some(r) => r.render(self.scanline, &self.scanline_data),
-            None => {
-                let mut r = Renderer::new().unwrap();
-                let res = r.render(self.scanline, &self.scanline_data);
-                self.renderer = Some(r);
-                res
-            }
-        }
-        .unwrap();
+        let _ = self
+            .renderer
+            .as_mut()
+            .expect("Renderer is initialized")
+            .render(self.scanline, &self.scanline_data)
+            .expect("Unexpected error from rendering");
     }
 
     // OAM data is made up of byte
@@ -306,7 +302,6 @@ impl PPU {
             OAMDATA => self.write_oam(val),
             PPUSCROLL => self.write_scroll(val),
             PPUADDR => self.write_ppu_addr(val),
-            //PPUDATA => bus.write(self.v_addr.read() as usize, val),
             _ => unreachable!(),
         }
         self.state.borrow_mut().status.set_low(val & 0x1F);
@@ -325,7 +320,6 @@ impl PPU {
             OAMDATA => self.read_oam(),
             PPUSCROLL => panic!("PPUSCROLL unreadable!"),
             PPUADDR => panic!("PPUADDR unreadable!"),
-            //PPUDATA => bus.read(self.v_addr.read() as usize),
             _ => unreachable!(),
         }
     }
@@ -345,8 +339,8 @@ impl<BusType: Bus> Clocked<BusType> for PPU {
         // interval) of the pre-render and visible scanlines.
         if self.cycle > 256 && self.cycle < 321 {
             self.oam_addr = 0;
-        } else {
-            self.do_cycle(bus);
         }
+
+        self.do_cycle(bus);
     }
 }

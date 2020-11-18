@@ -1,4 +1,6 @@
 pub mod graphics;
+pub use sdl2::event::Event;
+pub use sdl2::keyboard::Keycode;
 use std::mem::MaybeUninit;
 use std::sync::Once;
 

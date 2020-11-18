@@ -3,6 +3,8 @@ use crate::cartridge::*;
 use crate::common::*;
 use crate::cpu::*;
 use crate::ppu::*;
+use crate::sdl_interface::{Event, Keycode, SDL2Intrf};
+use std::time::Duration;
 
 struct Clock {}
 
@@ -38,23 +40,45 @@ impl VNES {
     pub fn load(&mut self, filename: &str) -> Result<u8, std::io::Error> {
         let cartridge = Cartridge::load(filename)?;
         self.bus.init(cartridge).expect("Error loading cartridge");
+        self.ppu.init().expect("Error initializing PPU");
         self.cpu.connect(&mut self.bus).init();
         Ok(0)
     }
 
     pub fn play(&mut self) {
-        while !self.cpu.done() {
+        'running: loop {
+            // Handle clock to see what should be executing
             let (cpu_tick, ppu_tick) = self.clock.tick();
 
+            // Tick CPU if running
             if cpu_tick {
                 println!("-- Clocking CPU!");
                 self.cpu.clock(&mut self.bus.connect(&mut self.ppu));
             }
 
+            // Tick PPU if running
             if ppu_tick {
                 println!("-- Clocking PPU!");
                 self.ppu.clock(&mut self.bus);
             }
+
+            // Handle any events that happened
+            for event in SDL2Intrf::context()
+                .event_pump()
+                .expect("There is only one instance")
+                .poll_iter()
+            {
+                match event {
+                    Event::Quit { .. }
+                    | Event::KeyDown {
+                        keycode: Some(Keycode::Escape),
+                        ..
+                    } => break 'running,
+                    _ => {}
+                }
+            }
+
+            ::std::thread::sleep(Duration::new(0, crate::graphics::FRAME_RATE_NS));
         }
     }
 }

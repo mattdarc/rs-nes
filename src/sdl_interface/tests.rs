@@ -2,6 +2,7 @@ use sdl2::event::Event;
 use sdl2::keyboard::Keycode;
 use std::time::Duration;
 use venus::graphics::Renderer;
+use venus::sdl_interface::*;
 
 fn main() {
     let mut renderer = Renderer::new().unwrap();
@@ -9,9 +10,15 @@ fn main() {
     let mut y: i32 = 0;
     let mut scanline: [u8; 256] = [0; 256];
     'running: loop {
-        let mut event_pump = renderer.render(y, &scanline).unwrap();
+        let _ = renderer
+            .render(y, &scanline)
+            .expect("Error rendering scanline");
 
-        for event in event_pump.poll_iter() {
+        for event in SDL2Intrf::context()
+            .event_pump()
+            .expect("Missing sdl event pump")
+            .poll_iter()
+        {
             match event {
                 Event::Quit { .. }
                 | Event::KeyDown {

@@ -64,7 +64,7 @@ impl Renderer {
     // when the screen needs to be updated
     pub fn render(
         &mut self, row: i32, scanline: &[u8],
-    ) -> Result<sdl2::EventPump, Box<dyn std::error::Error>> {
+    ) -> Result<(), Box<dyn std::error::Error>> {
         let canvas = &mut self.canvas;
         let line: Vec<_> = scanline
             .iter()
@@ -94,7 +94,9 @@ impl Renderer {
         );
         canvas.copy(&texture, None, Some(dst_rect))?;
         canvas.present();
-        Ok(SDL2Intrf::context().event_pump()?)
+
+        // Push the events into the queue for processing later
+        Ok(())
     }
 }
 
