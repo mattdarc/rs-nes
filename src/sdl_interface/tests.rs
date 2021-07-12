@@ -29,5 +29,9 @@ fn main() {
             let old = *c;
             *c = (old + 1) % 64;
         }
+
+        if y == 0 {
+            break 'running;
+        }
     }
 }

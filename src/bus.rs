@@ -1,91 +1,105 @@
 use crate::apu::*;
 use crate::cartridge::*;
-use crate::common::*;
 use crate::controller::*;
+use crate::debug::debug_print;
 use crate::memory::*;
 use crate::ppu::*;
 
+pub trait Bus {
+    fn read(&self, addr: u16) -> u8;
+    fn write(&mut self, addr: u16, val: u8);
+    fn read16(&self, addr: u16) -> u16 {
+        // bus reads do not cross pages, they wrap around page boundaries
+        let next_addr = (addr & 0xFF00) | ((addr + 1) & 0xFF);
+        (self.read(addr) as u16) | ((self.read(next_addr) as u16) << 8)
+    }
+    fn read_n(&mut self, addr: u16, n: u16) -> Vec<u8> {
+        let mut v = Vec::with_capacity(n as usize);
+        for idx in 0..n {
+            v.push(self.read(addr + idx));
+        }
+        v
+    }
+    fn cycles(&self) -> usize;
+    fn clock(&mut self);
+}
+
 pub struct NesBus {
-    ram: RAM,
+    game: Cartridge,
+    controller1: Controller,
+    controller2: Controller,
+    ppu: PPU,
     apu: APU,
-    controller_1: Controller,
-    controller_2: Controller,
-    cartridge: Option<Cartridge>,
-}
+    cpu_ram: RAM,
+    cycles: usize,
 
-pub struct PPUAccessibleBus<'a> {
-    bus: &'a mut NesBus,
-    ppu: &'a mut PPU,
-}
-
-impl Bus for NesBus {
-    fn read(&mut self, addr: usize) -> u8 {
-        let val = match addr {
-            0..=0x1FFF => self.ram.read(addr % 0x800), // Mirroring
-            0x2000..=0x3FFF => panic!("No access to PPU!"),
-            0x4016 => self.controller_1.read(0), // TODO Remove arg
-            0x4017 => self.controller_2.read(0),
-            0x4018..=0xFFFF => self.cartridge.as_ref().unwrap().prg_read(addr),
-            _ => unreachable!("Invalid read from address {:#X}!", addr),
-        };
-        //println("-- Read value {:#X} from {:#X}", val, addr);
-        val
-    }
-
-    fn write(&mut self, addr: usize, val: u8) {
-        //println("$$ Writing {:#X} to RAM {:#X}", val, addr);
-        match addr {
-            0..=0x1FFF => self.ram.write(addr % 0x800, val),
-            0x2000..=0x3FFF => panic!("No access to PPU!"),
-            0x4016 => self.controller_1.write(0, val),
-            0x4017 => self.controller_2.write(0, val),
-            0x4018..=0xFFFF => self.cartridge.as_ref().unwrap().prg_write(addr, val),
-            _ => unreachable!("Invalid write {} to address {}!", val, addr),
-        }
-    }
-}
-
-impl<'a> Bus for PPUAccessibleBus<'a> {
-    fn read(&mut self, addr: usize) -> u8 {
-        match addr {
-            0x2000..=0x3FFF => self.ppu.read(addr),
-            addr => self.bus.read(addr),
-        }
-    }
-
-    fn write(&mut self, addr: usize, val: u8) {
-        match addr {
-            0x2000..=0x3FFF => {
-                if self.ppu.is_ppu_data(addr) {
-                    self.ppu.write(addr, val);
-                } else {
-                    self.write(self.ppu.vram_addr(), val);
-                }
-            }
-            addr => self.bus.write(addr, val),
-        }
-    }
+    cpu_test_enabled: bool,
 }
 
 impl NesBus {
-    pub fn new() -> NesBus {
+    pub fn with_cartridge(game: Cartridge) -> Self {
         NesBus {
-            ram: RAM::new(0x800),
-            apu: APU::default(),
-            controller_1: Controller::default(),
-            controller_2: Controller::default(),
-            cartridge: None,
+            game: game.clone(),
+            controller1: Controller::new(),
+            controller2: Controller::new(),
+            ppu: PPU::new(game),
+            apu: APU::new(),
+            cpu_ram: RAM::with_size(2048),
+
+            cycles: 7,
+            cpu_test_enabled: false,
+        }
+    }
+}
+
+impl Bus for NesBus {
+    fn read(&self, addr: u16) -> u8 {
+        let addr = addr as usize;
+
+        let value = match addr {
+            0x0..=0x1FFF => self.cpu_ram.read(addr % 0x800),
+            // 0x2000..=0x3FFF => self.ppu.read_register((addr - 0x2000) % 8),
+            // 0x4000..=0x4015 => self.apu.read_register(addr - 0x4000),
+            // 0x4016 => self.controller1.read(),
+            // 0x4017 => self.controller2.read(),
+            // 0x4018..=0x401F => {
+            //     if self.cpu_test_enabled {
+            //         self.apu.read_test_register((addr - 0x4000) % 18);
+            //     }
+            // }
+            0x4020..=0xFFFF => self.game.prg_read(addr),
+            _ => (addr >> 8) as u8,
+        };
+        debug_print!(
+            "--- CYC:{} Read value {:X} from addr {:X}",
+            self.cycles(),
+            value,
+            addr
+        );
+        value
+    }
+
+    fn write(&mut self, addr: u16, val: u8) {
+        debug_print!(
+            "--- CYC:{} Writing value {:X} to addr {:X}",
+            self.cycles(),
+            val,
+            addr
+        );
+        let addr = addr as usize;
+
+        match addr {
+            0x0..=0x1FFF => self.cpu_ram.write(addr % 0x800, val),
+            0x4020..=0xFFFF => self.game.prg_write(addr, val),
+            _ => {}
         }
     }
 
-    pub fn init(
-        &mut self, cartridge: Cartridge,
-    ) -> Result<(), Box<dyn std::error::Error>> {
-        self.cartridge = Some(cartridge);
-        Ok(())
+    fn cycles(&self) -> usize {
+        self.cycles
     }
 
-    pub fn connect<'a>(&'a mut self, ppu: &'a mut PPU) -> PPUAccessibleBus<'a> {
-        PPUAccessibleBus { bus: self, ppu }
+    fn clock(&mut self) {
+        self.cycles += 1;
     }
 }

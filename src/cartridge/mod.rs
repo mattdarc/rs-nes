@@ -1,4 +1,8 @@
-use crate::mapper::*;
+mod header;
+mod mapper;
+
+use header::Header;
+use mapper::*;
 use std::cell::RefCell;
 use std::io::Read;
 
@@ -6,7 +10,7 @@ pub type Cartridge = RefCell<CartridgeImpl>;
 
 pub trait CartridgeInterface {
     fn get_name(&self) -> String;
-    fn load(filename: &str) -> Result<Cartridge, std::io::Error>;
+    fn load(filename: &str) -> std::io::Result<Cartridge>;
     fn prg_read(&self, addr: usize) -> u8;
     fn prg_write(&self, addr: usize, val: u8);
     fn chr_read(&self, addr: usize) -> u8;
@@ -61,19 +65,6 @@ impl CartridgeInterface for Cartridge {
 }
 
 #[cfg(test)]
-pub mod test {
-    use super::*;
-    use crate::mapper::test;
-
-    pub fn program(data: &[u8]) -> CartridgeImpl {
-        CartridgeImpl {
-            name: String::default(),
-            mapper: test::mapper_with(data),
-        }
-    }
-}
-
-#[cfg(test)]
 mod tests {
     use super::*;
     use std::io::ErrorKind;
@@ -90,7 +81,7 @@ mod tests {
 
     #[test]
     fn load_some() {
-        let exp_name = "roms/Tetris.nes";
+        let exp_name = "nes-test-roms/cpu_dummy_reads/cpu_dummy_reads.nes";
         let cart = match Cartridge::load(exp_name) {
             Ok(cart) => cart,
             Err(e) => unreachable!("Error {:?}", e),

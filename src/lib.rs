@@ -1,32 +1,61 @@
-#![allow(dead_code)]
-
-#[macro_use]
-mod common;
+#![feature(const_panic)]
 
 extern crate sdl2;
 
 #[macro_use]
-extern crate bitfield;
+extern crate bitflags;
 
-// TODO These should not be public
-pub mod apu;
-pub mod bus;
-pub mod cartridge;
-pub mod controller;
-pub mod cpu;
-pub mod instructions;
-pub mod mapper;
-pub mod memory;
-pub mod ppu;
-pub mod sdl_interface;
-pub mod vnes;
+mod apu;
+mod bus;
+mod cartridge;
+mod controller;
+mod cpu;
+mod debug;
+mod memory;
+mod ppu;
+mod sdl_interface;
 
-pub use vnes::VNES;
+use bus::*;
+use cartridge::*;
+use cpu::*;
 
 pub mod graphics {
     pub use super::sdl_interface::graphics::Renderer;
     pub const FRAME_RATE_NS: u32 =
         1_000_000_000 / 60 / super::sdl_interface::graphics::NES_SCREEN_HEIGHT;
+}
+
+#[derive(Debug)]
+pub enum NesError {
+    Stub,
+}
+
+pub struct VNES {
+    cpu: cpu::CPU<bus::NesBus>,
+}
+
+impl VNES {
+    pub fn new(rom: &str) -> std::io::Result<Self> {
+        let game = Cartridge::load(rom)?;
+        let bus = NesBus::with_cartridge(game);
+        Ok(VNES { cpu: CPU::new(bus) })
+    }
+
+    pub fn enable_logging(&mut self, log: bool) {
+        self.cpu.enable_logging(log);
+    }
+
+    // TODO: Error handling. library types should not panic
+    pub fn play(&mut self) -> Result<(), NesError> {
+        self.cpu.bypass_reset(0xC000);
+        loop {
+            if self.cpu.clock() {
+                break;
+            }
+        }
+
+        Ok(())
+    }
 }
 
 pub mod audio {}

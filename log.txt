@@ -1,0 +1,160 @@
+
+running 44 tests
+test cartridge::header::tests::header ... ok
+test cpu::status::test::empty ... ok
+test cartridge::tests::load_none ... ok
+test cpu::tests::and ... FAILED
+test cpu::tests::asl ... FAILED
+test cpu::tests::adc ... FAILED
+test cpu::tests::bit ... ok
+test cpu::tests::branches ... FAILED
+test cpu::tests::cmp ... FAILED
+test cpu::tests::cpx ... FAILED
+test cpu::tests::cpy ... FAILED
+test cpu::tests::dex ... ok
+test cpu::tests::dec ... ok
+test cpu::tests::dey ... ok
+test cartridge::tests::load_some ... ok
+test cpu::tests::eor ... FAILED
+test cpu::tests::inc ... ok
+test cpu::tests::inx ... ok
+test cpu::tests::flags ... ok
+test cpu::tests::iny ... ok
+test cpu::tests::jmp ... ok
+test cpu::tests::jsr ... ok
+test cpu::tests::lda ... FAILED
+test cpu::tests::ldx ... FAILED
+test cpu::tests::ldy ... FAILED
+test cpu::tests::lsr ... FAILED
+test cpu::tests::negative ... ok
+test cpu::tests::nop ... ok
+test cpu::tests::ora ... FAILED
+test cpu::tests::paging ... ok
+test cpu::tests::rol ... FAILED
+test cpu::tests::ror ... FAILED
+test cpu::tests::rt ... ok
+test cpu::tests::sbc ... ok
+test cpu::tests::stack ... ok
+test cpu::tests::sta ... ok
+test cpu::tests::stx ... ok
+test cpu::tests::sty ... ok
+test cpu::tests::tax ... ok
+test cpu::tests::tay ... ok
+test cpu::tests::tsx ... ok
+test cpu::tests::txa ... ok
+test cpu::tests::txs ... ok
+test cpu::tests::tya ... ok
+
+failures:
+
+---- cpu::tests::and stdout ----
+-- DATA: [41, 3]
+
+==== Execution instruction 29: AND Immediate ====
+thread 'cpu::tests::and' panicked at 'src/cpu/tests.rs:28:57: Read address 0xFFFF out of range of 0xFFFF', src/cpu/tests.rs:28:57
+
+---- cpu::tests::asl stdout ----
+-- DATA: [10]
+
+==== Execution instruction A: ASL Accumulator ====
+thread 'cpu::tests::asl' panicked at 'src/cpu/tests.rs:28:57: Read address 0xFFFF out of range of 0xFFFF', src/cpu/tests.rs:28:57
+
+---- cpu::tests::adc stdout ----
+-- DATA: [105, 3]
+
+==== Execution instruction 69: ADC Immediate ====
+thread 'cpu::tests::adc' panicked at 'src/cpu/tests.rs:28:57: Read address 0xFFFF out of range of 0xFFFF', src/cpu/tests.rs:28:57
+note: run with `RUST_BACKTRACE=1` environment variable to display a backtrace
+
+---- cpu::tests::branches stdout ----
+-- DATA: [176, 16]
+
+==== Execution instruction B0: BCS Relative ====
+thread 'cpu::tests::branches' panicked at 'src/cpu/tests.rs:28:57: Read address 0xFFFF out of range of 0xFFFF', src/cpu/tests.rs:28:57
+
+---- cpu::tests::cmp stdout ----
+-- DATA: [201, 3]
+
+==== Execution instruction C9: CMP Immediate ====
+thread 'cpu::tests::cmp' panicked at 'src/cpu/tests.rs:28:57: Read address 0xFFFF out of range of 0xFFFF', src/cpu/tests.rs:28:57
+
+---- cpu::tests::cpx stdout ----
+-- DATA: [224, 3]
+
+==== Execution instruction E0: CPX Immediate ====
+thread 'cpu::tests::cpx' panicked at 'src/cpu/tests.rs:28:57: Read address 0xFFFF out of range of 0xFFFF', src/cpu/tests.rs:28:57
+
+---- cpu::tests::cpy stdout ----
+-- DATA: [192, 3]
+
+==== Execution instruction C0: CPY Immediate ====
+thread 'cpu::tests::cpy' panicked at 'src/cpu/tests.rs:28:57: Read address 0xFFFF out of range of 0xFFFF', src/cpu/tests.rs:28:57
+
+---- cpu::tests::eor stdout ----
+-- DATA: [73, 3]
+
+==== Execution instruction 49: EOR Immediate ====
+thread 'cpu::tests::eor' panicked at 'src/cpu/tests.rs:28:57: Read address 0xFFFF out of range of 0xFFFF', src/cpu/tests.rs:28:57
+
+---- cpu::tests::lda stdout ----
+-- DATA: [169, 3]
+
+==== Execution instruction A9: LDA Immediate ====
+thread 'cpu::tests::lda' panicked at 'src/cpu/tests.rs:28:57: Read address 0xFFFF out of range of 0xFFFF', src/cpu/tests.rs:28:57
+
+---- cpu::tests::ldx stdout ----
+-- DATA: [162, 3]
+
+==== Execution instruction A2: LDX Immediate ====
+thread 'cpu::tests::ldx' panicked at 'src/cpu/tests.rs:28:57: Read address 0xFFFF out of range of 0xFFFF', src/cpu/tests.rs:28:57
+
+---- cpu::tests::ldy stdout ----
+-- DATA: [160, 3]
+
+==== Execution instruction A0: LDY Immediate ====
+thread 'cpu::tests::ldy' panicked at 'src/cpu/tests.rs:28:57: Read address 0xFFFF out of range of 0xFFFF', src/cpu/tests.rs:28:57
+
+---- cpu::tests::lsr stdout ----
+-- DATA: [74]
+
+==== Execution instruction 4A: LSR Accumulator ====
+thread 'cpu::tests::lsr' panicked at 'src/cpu/tests.rs:28:57: Read address 0xFFFF out of range of 0xFFFF', src/cpu/tests.rs:28:57
+
+---- cpu::tests::ora stdout ----
+-- DATA: [9, 3]
+
+==== Execution instruction 9: ORA Immediate ====
+thread 'cpu::tests::ora' panicked at 'src/cpu/tests.rs:28:57: Read address 0xFFFF out of range of 0xFFFF', src/cpu/tests.rs:28:57
+
+---- cpu::tests::rol stdout ----
+-- DATA: [42]
+
+==== Execution instruction 2A: ROL Accumulator ====
+thread 'cpu::tests::rol' panicked at 'src/cpu/tests.rs:28:57: Read address 0xFFFF out of range of 0xFFFF', src/cpu/tests.rs:28:57
+
+---- cpu::tests::ror stdout ----
+-- DATA: [106]
+
+==== Execution instruction 6A: ROR Accumulator ====
+thread 'cpu::tests::ror' panicked at 'src/cpu/tests.rs:28:57: Read address 0xFFFF out of range of 0xFFFF', src/cpu/tests.rs:28:57
+
+
+failures:
+    cpu::tests::adc
+    cpu::tests::and
+    cpu::tests::asl
+    cpu::tests::branches
+    cpu::tests::cmp
+    cpu::tests::cpx
+    cpu::tests::cpy
+    cpu::tests::eor
+    cpu::tests::lda
+    cpu::tests::ldx
+    cpu::tests::ldy
+    cpu::tests::lsr
+    cpu::tests::ora
+    cpu::tests::rol
+    cpu::tests::ror
+
+test result: FAILED. 29 passed; 15 failed; 0 ignored; 0 measured; 0 filtered out; finished in 0.01s
+

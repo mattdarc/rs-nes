@@ -13,8 +13,12 @@ name = "sdl_tests"
 path = "src/sdl_interface/tests.rs"
 harness = false
 
+[[test]]
+name = "rom_tests"
+path = "src/tests/rom_tests.rs"
+
 # See more keys and their definitions at https://doc.rust-lang.org/cargo/reference/manifest.html
 
 [dependencies]
 sdl2 = "0.32.1"
-bitfield = "0.13.2"
+bitflags = "1.2.1"
