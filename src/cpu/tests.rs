@@ -4,7 +4,7 @@ use crate::memory::{RAM, ROM};
 use instructions::AddressingMode::*;
 use instructions::InstrName::*;
 
-const TEST_PROGRAM_START: usize = 0x7FF0;
+const TEST_PROGRAM_START: u16 = 0x7FF0;
 
 struct TestBus {
     program: ROM,
@@ -22,8 +22,6 @@ impl TestBus {
 
 impl Bus for TestBus {
     fn read(&self, addr: u16) -> u8 {
-        let addr = addr as usize;
-
         match addr {
             TEST_PROGRAM_START..=0xFFFF => self.program.read(addr),
             _ => self.ram.read(addr % 0x800),
@@ -31,8 +29,6 @@ impl Bus for TestBus {
     }
 
     fn write(&mut self, addr: u16, val: u8) {
-        let addr = addr as usize;
-
         match addr {
             TEST_PROGRAM_START..=0xFFFF => panic!("Cannot write to ROM"),
             _ => self.ram.write(addr % 0x800, val),
@@ -49,7 +45,8 @@ impl Bus for TestBus {
 fn initialize_program(data: &[u8]) -> CPU<TestBus> {
     println!("-- DATA: {:?}", data);
     let mut program = vec![0; 0xFFFF];
-    program[TEST_PROGRAM_START..(TEST_PROGRAM_START + data.len())].copy_from_slice(data);
+    program[TEST_PROGRAM_START as usize..(TEST_PROGRAM_START as usize + data.len())]
+        .copy_from_slice(data);
     program[RESET_VECTOR_START as usize] = (TEST_PROGRAM_START & 0xFF) as u8;
     program[RESET_VECTOR_START as usize + 1] = (TEST_PROGRAM_START >> 8) as u8;
 

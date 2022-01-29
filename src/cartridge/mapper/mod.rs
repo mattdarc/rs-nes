@@ -17,21 +17,21 @@ pub const RESET_VECTOR_START: u16 = 0xC004;
 
 pub trait Mapper {
     fn get_num(&self) -> u8;
-    fn rom_start(&self) -> usize {
+    fn rom_start(&self) -> u16 {
         0x8000
     }
 
     fn box_clone(&self) -> Box<dyn Mapper>;
 
     // PRG
-    fn prg_read(&self, addr: usize) -> u8;
-    fn prg_write(&mut self, addr: usize, val: u8);
-    fn prg_size(&self) -> usize;
+    fn prg_read(&self, addr: u16) -> u8;
+    fn prg_write(&mut self, addr: u16, val: u8);
+    fn prg_size(&self) -> u16;
 
     // CHR
-    fn chr_read(&self, addr: usize) -> u8;
-    fn chr_write(&mut self, addr: usize, val: u8);
-    fn chr_size(&self) -> usize;
+    fn chr_read(&self, addr: u16) -> u8;
+    fn chr_write(&mut self, addr: u16, val: u8);
+    fn chr_size(&self) -> u16;
 }
 
 impl Clone for Box<dyn Mapper> {
@@ -57,12 +57,26 @@ impl Default for Box<dyn Mapper> {
 }
 
 pub fn create_mapper(header: &Header, data: &[u8]) -> Box<dyn Mapper> {
-    match header.get_mapper_num() {
+    let mapper: Box<dyn Mapper> = match header.get_mapper_num() {
         0 => Box::new(Mapper0::new(header, data)),
         1 => Box::new(Mapper1::new(header, data)),
         3 => Box::new(Mapper3::new(header, data)),
         n => unreachable!("Unimplemented mapper {}!", n),
-    }
+    };
+    println!(
+        "--- CHR {:?}",
+        [
+            mapper.chr_read(0),
+            mapper.chr_read(1),
+            mapper.chr_read(2),
+            mapper.chr_read(3),
+            mapper.chr_read(4),
+            mapper.chr_read(5),
+            mapper.chr_read(6),
+            mapper.chr_read(7),
+        ]
+    );
+    mapper
 }
 
 #[cfg(test)]
@@ -72,7 +86,7 @@ pub mod test {
     // Create a test mapper, setting the reset vector to the first instruction
     pub fn mapper_with(data: &[u8], reset_vector: u16) -> Box<dyn Mapper> {
         let header = Header::default();
-        let mut rom = vec![0; header.get_prg_rom_size()];
+        let mut rom = vec![0; header.get_prg_rom_size() as usize];
 
         println!("-- Cloning data {:?} into ROM", data);
         rom[0..data.len()].clone_from_slice(data);

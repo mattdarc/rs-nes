@@ -11,10 +11,10 @@ pub type Cartridge = RefCell<CartridgeImpl>;
 pub trait CartridgeInterface {
     fn get_name(&self) -> String;
     fn load(filename: &str) -> std::io::Result<Cartridge>;
-    fn prg_read(&self, addr: usize) -> u8;
-    fn prg_write(&self, addr: usize, val: u8);
-    fn chr_read(&self, addr: usize) -> u8;
-    fn chr_write(&self, addr: usize, val: u8);
+    fn prg_read(&self, addr: u16) -> u8;
+    fn prg_write(&self, addr: u16, val: u8);
+    fn chr_read(&self, addr: u16) -> u8;
+    fn chr_write(&self, addr: u16, val: u8);
 }
 
 #[derive(Debug, Default, Clone)]
@@ -37,7 +37,8 @@ impl CartridgeInterface for Cartridge {
         let header = Header::from(&header);
         println!("Header: {:?}", &header);
 
-        let mut data = vec![0; header.get_prg_rom_size()];
+        let data_size = header.get_prg_rom_size() + header.get_chr_ram_size();
+        let mut data = vec![0; data_size as usize];
         fh.read_exact(&mut data)?;
 
         let mapper = create_mapper(&header, &data);
@@ -47,19 +48,19 @@ impl CartridgeInterface for Cartridge {
         }))
     }
 
-    fn prg_read(&self, addr: usize) -> u8 {
+    fn prg_read(&self, addr: u16) -> u8 {
         self.borrow().mapper.prg_read(addr)
     }
 
-    fn prg_write(&self, addr: usize, val: u8) {
+    fn prg_write(&self, addr: u16, val: u8) {
         self.borrow_mut().mapper.prg_write(addr, val);
     }
 
-    fn chr_read(&self, addr: usize) -> u8 {
+    fn chr_read(&self, addr: u16) -> u8 {
         self.borrow().mapper.chr_read(addr)
     }
 
-    fn chr_write(&self, addr: usize, val: u8) {
+    fn chr_write(&self, addr: u16, val: u8) {
         self.borrow_mut().mapper.chr_write(addr, val);
     }
 }

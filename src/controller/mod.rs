@@ -1,3 +1,4 @@
+#[derive(Default, Clone)]
 pub struct Controller {}
 
 impl Controller {

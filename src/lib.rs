@@ -1,5 +1,3 @@
-#![feature(const_panic)]
-
 extern crate sdl2;
 
 #[macro_use]
@@ -7,13 +5,14 @@ extern crate bitflags;
 
 mod apu;
 mod bus;
-mod cartridge;
+pub mod cartridge;
 mod controller;
 mod cpu;
 mod debug;
 mod memory;
-mod ppu;
-mod sdl_interface;
+mod common;
+pub mod ppu;
+pub mod sdl_interface;
 
 use bus::*;
 use cartridge::*;

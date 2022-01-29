@@ -9,9 +9,9 @@ pub struct ROM {
 }
 
 impl ROM {
-    pub fn with_size(size: usize) -> Self {
+    pub fn with_size(size: u16) -> Self {
         ROM {
-            data: vec![0; size],
+            data: vec![0; size as usize],
         }
     }
 
@@ -19,48 +19,61 @@ impl ROM {
         ROM { data: data.into() }
     }
 
-    pub fn with_data_and_size(data: &[u8], size: usize) -> ROM {
-        println!("Size of ROM: 0x{:X}", size);
-        let mut rom = ROM::with_data(data);
-        rom.data.extend(vec![0; size - data.len()].into_iter());
+    pub fn with_data_and_size(data: &[u8], size: u16) -> ROM {
+        println!("Size of ROM: {:X}", size);
+        let mut rom = ROM::with_size(size);
+        rom.data
+            .copy_from_slice(&data[0..(size as usize).min(data.len())]);
         rom
     }
 
     #[track_caller]
-    pub fn read(&self, addr: usize) -> u8 {
+    pub fn read(&self, addr: u16) -> u8 {
         assert!(
-            addr < self.data.len(),
+            addr < self.len(),
             "{}: Read address 0x{:X} out of range of 0x{:X}",
             std::panic::Location::caller(),
             addr,
             self.data.len(),
         );
-        self.data[addr]
+        self.data[addr as usize]
     }
 
-    pub fn len(&self) -> usize {
-        self.data.len()
+    pub fn len(&self) -> u16 {
+        self.data.len() as u16
     }
 }
 
 impl RAM {
-    pub fn with_size(size: usize) -> Self {
+    pub fn with_size(size: u16) -> Self {
         RAM {
-            data: vec![0; size],
+            data: vec![0; size as usize],
         }
     }
 
-    #[track_caller]
-    pub fn read(&self, addr: usize) -> u8 {
-        self.data[addr]
+    pub fn with_data(data: &[u8]) -> Self {
+        RAM { data: data.into() }
+    }
+
+    pub fn with_data_and_size(data: &[u8], size: u16) -> RAM {
+        println!("Size of DATA vs. RAM: {:X} vs. {:X}", data.len(), size);
+        let mut ram = RAM::with_data(data);
+        ram.data
+            .extend(vec![0; size as usize - data.len()].into_iter());
+        ram
     }
 
     #[track_caller]
-    pub fn write(&mut self, addr: usize, val: u8) {
-        self.data[addr] = val;
+    pub fn read(&self, addr: u16) -> u8 {
+        self.data[addr as usize]
     }
 
-    pub fn len(&self) -> usize {
-        self.data.len()
+    #[track_caller]
+    pub fn write(&mut self, addr: u16, val: u8) {
+        self.data[addr as usize] = val;
+    }
+
+    pub fn len(&self) -> u16 {
+        self.data.len() as u16
     }
 }

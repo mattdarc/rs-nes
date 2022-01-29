@@ -26,10 +26,10 @@ pub trait Bus {
 
 pub struct NesBus {
     game: Cartridge,
-    controller1: Controller,
-    controller2: Controller,
+    _controller1: Controller,
+    _controller2: Controller,
     ppu: PPU,
-    apu: APU,
+    _apu: APU,
     cpu_ram: RAM,
     cycles: usize,
 
@@ -40,10 +40,10 @@ impl NesBus {
     pub fn with_cartridge(game: Cartridge) -> Self {
         NesBus {
             game: game.clone(),
-            controller1: Controller::new(),
-            controller2: Controller::new(),
+            _controller1: Controller::new(),
+            _controller2: Controller::new(),
             ppu: PPU::new(game),
-            apu: APU::new(),
+            _apu: APU::new(),
             cpu_ram: RAM::with_size(2048),
 
             cycles: 7,
@@ -54,11 +54,9 @@ impl NesBus {
 
 impl Bus for NesBus {
     fn read(&self, addr: u16) -> u8 {
-        let addr = addr as usize;
-
         let value = match addr {
             0x0..=0x1FFF => self.cpu_ram.read(addr % 0x800),
-            // 0x2000..=0x3FFF => self.ppu.read_register((addr - 0x2000) % 8),
+            0x2000..=0x3FFF => self.ppu.register_read(addr),
             // 0x4000..=0x4015 => self.apu.read_register(addr - 0x4000),
             // 0x4016 => self.controller1.read(),
             // 0x4017 => self.controller2.read(),
@@ -86,11 +84,11 @@ impl Bus for NesBus {
             val,
             addr
         );
-        let addr = addr as usize;
 
         match addr {
             0x0..=0x1FFF => self.cpu_ram.write(addr % 0x800, val),
             0x4020..=0xFFFF => self.game.prg_write(addr, val),
+            0x2000..=0x3FFF => self.ppu.register_write(addr, val),
             _ => {}
         }
     }
@@ -101,5 +99,6 @@ impl Bus for NesBus {
 
     fn clock(&mut self) {
         self.cycles += 1;
+        //self.ppu.clock();
     }
 }

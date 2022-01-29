@@ -4,6 +4,8 @@ use std::time::Duration;
 use venus::graphics::Renderer;
 
 fn main() {
+    return;
+
     let mut renderer = Renderer::new().unwrap();
 
     let mut y: i32 = 0;

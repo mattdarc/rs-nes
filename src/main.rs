@@ -1,6 +1,5 @@
 // use venus::cartridge::*;
 // use venus::cpu::*;
-use venus::*;
 
 fn main() {
     // let mut vnes = VNES::new();
