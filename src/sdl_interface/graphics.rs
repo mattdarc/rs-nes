@@ -4,6 +4,7 @@ use sdl2::pixels::{Color, PixelFormatEnum};
 use sdl2::rect::Rect;
 use sdl2::render::{TextureAccess, WindowCanvas};
 use sdl2::surface::Surface;
+use sdl2::video::DisplayMode;
 use std::mem::size_of;
 use std::slice::from_raw_parts;
 
@@ -19,7 +20,7 @@ const PALETTE_TABLE: [u32; 64] = [
 ];
 
 const BLOCK_SIZE: u32 = 8; // 8x8 tile
-const BYTES_PER_PIX: u32 = (size_of::<u32>() / size_of::<u8>()) as u32; // RGB888 rounds up to word
+const PX_SIZE_BYTES: u32 = (size_of::<u32>() / size_of::<u8>()) as u32; // RGB888 rounds up to word
 
 const WINDOW_NAME: &str = "Venus NES Emulator";
 
@@ -32,12 +33,37 @@ const WINDOW_HEIGHT: u32 = NES_SCREEN_HEIGHT * WINDOW_HEIGHT_MUL;
 pub const NES_SCREEN_WIDTH: u32 = 256;
 pub const NES_SCREEN_HEIGHT: u32 = 240;
 
+// for some reason textures are repeating every 120 bytes
+fn dump_texture_buf(buf: &[u8], px_size: usize) {
+    let width = 128;
+
+    let mut s = String::new();
+    for idx in (0..buf.len()).step_by(px_size) {
+        if idx % (width * px_size) == 0 {
+            s.push('\n');
+        }
+
+        let val = buf[idx];
+        if val != buf[idx + 1] || val != buf[idx + 2] {
+            s.push('#');
+        } else {
+            match val {
+                85 | 170 | 255 => s.push(char::from_digit((val / 85) as u32, 10).unwrap()),
+                0 => s.push('.'),
+                _ => s.push('?'),
+            }
+        }
+    }
+
+    println!("\nTiles:\n{}", &s);
+}
+
 // This is safe since I know that the underlying data is valid and contiguous
 fn to_sdl2_slice(slice: &[u32]) -> &[u8] {
     unsafe {
         from_raw_parts(
             slice.as_ptr() as *const u8,
-            slice.len() * BYTES_PER_PIX as usize,
+            slice.len() * PX_SIZE_BYTES as usize,
         )
     }
 }
@@ -47,26 +73,39 @@ pub struct Renderer {
 }
 
 impl Renderer {
-    pub fn new() -> Result<Renderer, Box<dyn std::error::Error>> {
-        let video_subsystem = SDL2Intrf::context().video()?;
+    pub fn new() -> Self {
+        let sdl_ctx = SDL2Intrf::context();
+        let video_subsystem = sdl_ctx.video().unwrap();
 
-        let window = video_subsystem
+        let mut window = video_subsystem
             .window(WINDOW_NAME, WINDOW_WIDTH, WINDOW_HEIGHT)
             .position_centered()
-            .build()?;
+            .build()
+            .unwrap();
+        window
+            .set_display_mode(Some(DisplayMode::new(
+                PixelFormatEnum::RGB888,
+                WINDOW_WIDTH as i32,
+                WINDOW_HEIGHT as i32,
+                30,
+            )))
+            .unwrap();
 
-        let mut canvas = window.into_canvas().build()?;
+        let mut canvas = window.into_canvas().build().unwrap();
         canvas.clear();
-        Ok(Renderer { canvas })
+
+        Renderer { canvas }
     }
 
     // TODO: May need to find a way to batch these together, or clear() only
     // when the screen needs to be updated
-    pub fn render(
-        &mut self,
-        row: i32,
-        scanline: &[u8],
-    ) -> Result<sdl2::EventPump, Box<dyn std::error::Error>> {
+    pub fn render_line(&mut self, row: i32, scanline: &[u8]) {
+        assert_eq!(
+            scanline.len() as u32,
+            NES_SCREEN_WIDTH,
+            "scanline is not the width of the screen!"
+        );
+
         let canvas = &mut self.canvas;
         let line: Vec<_> = scanline
             .iter()
@@ -76,33 +115,46 @@ impl Renderer {
         let creator = canvas.texture_creator();
 
         // TODO: Should this be created each time or reused??
-        let line_size = scanline.len() as u32;
-        let mut texture = creator.create_texture(
-            Some(PixelFormatEnum::RGB888),
-            TextureAccess::Streaming,
-            line_size,
-            1,
-        )?;
-        texture.update(
-            None,
-            to_sdl2_slice(&line),
-            (line_size * BYTES_PER_PIX) as usize,
-        )?;
+        let mut texture = creator
+            .create_texture(None, TextureAccess::Streaming, NES_SCREEN_WIDTH, 1)
+            .unwrap();
+        texture
+            .update(
+                None,
+                to_sdl2_slice(&line),
+                (NES_SCREEN_WIDTH * PX_SIZE_BYTES) as usize,
+            )
+            .unwrap();
         let dst_rect = Rect::new(
             0,
             WINDOW_HEIGHT_MUL as i32 * row,
             WINDOW_WIDTH,
             WINDOW_HEIGHT_MUL,
         );
-        canvas.copy(&texture, None, Some(dst_rect))?;
+        canvas.copy(&texture, None, Some(dst_rect)).unwrap();
         canvas.present();
-        Ok(SDL2Intrf::context().event_pump()?)
+    }
+
+    /// Display a buffer buf on the screen. The format of the buffer is assumed to be in the RGB888
+    /// format
+    pub fn render_screen_raw(&mut self, buf: &[u8], width: u32, height: u32) {
+        // dump_texture_buf(&buf, PX_SIZE_BYTES);
+
+        let creator = self.canvas.texture_creator();
+        let mut texture = creator
+            .create_texture(None, TextureAccess::Streaming, width, height)
+            .unwrap();
+
+        let pitch_bytes: usize = PX_SIZE_BYTES as usize * width as usize;
+        texture.update(None, &buf, pitch_bytes).unwrap();
+        self.canvas.copy(&texture, None, None).unwrap();
+        self.canvas.present();
     }
 }
 
 impl Clone for Renderer {
     fn clone(&self) -> Self {
-        Renderer::new().unwrap()
+        Renderer::new()
     }
 }
 

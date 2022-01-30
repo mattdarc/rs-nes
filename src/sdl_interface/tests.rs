@@ -1,17 +1,19 @@
 use sdl2::event::Event;
 use sdl2::keyboard::Keycode;
 use std::time::Duration;
-use venus::graphics::Renderer;
+use venus::graphics::{Renderer, SDL2Intrf};
 
 fn main() {
     return;
 
-    let mut renderer = Renderer::new().unwrap();
+    let mut renderer = Renderer::new();
 
     let mut y: i32 = 0;
     let mut scanline: [u8; 256] = [0; 256];
+
+    let mut event_pump = SDL2Intrf::context().event_pump().unwrap();
     'running: loop {
-        let mut event_pump = renderer.render(y, &scanline).unwrap();
+        renderer.render_line(y, &scanline);
 
         for event in event_pump.poll_iter() {
             match event {

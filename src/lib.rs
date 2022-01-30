@@ -20,6 +20,7 @@ use cpu::*;
 
 pub mod graphics {
     pub use super::sdl_interface::graphics::Renderer;
+    pub use super::sdl_interface::SDL2Intrf;
     pub const FRAME_RATE_NS: u32 =
         1_000_000_000 / 60 / super::sdl_interface::graphics::NES_SCREEN_HEIGHT;
 }

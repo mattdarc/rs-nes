@@ -39,9 +39,9 @@ bitflags! {
 
 #[derive(Default)]
 pub struct Registers {
-    pub ctrl: PpuCtrl,
-    pub mask: PpuMask,
-    pub status: PpuStatus,
+    pub ctrl: u8,
+    pub mask: u8,
+    pub status: u8,
     pub oamaddr: u8,
     pub oamdata: u8,
     pub scroll: u8,

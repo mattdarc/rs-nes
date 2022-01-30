@@ -49,6 +49,7 @@ mod flags;
 mod registers;
 
 use crate::cartridge::{Cartridge, CartridgeInterface};
+use crate::sdl_interface::graphics;
 use crate::sdl_interface::SDL2Intrf;
 use flags::*;
 use registers::*;
@@ -56,106 +57,46 @@ use sdl2::pixels::{Color, PixelFormatEnum};
 use sdl2::rect::Rect;
 use sdl2::render::{TextureAccess, WindowCanvas};
 use sdl2::surface::Surface;
-use sdl2::video::DisplayMode;
 use std::mem::size_of;
 use std::slice::from_raw_parts;
-
-const COLORS: [u8; 4] = [0, 85, 170, 255];
-const WINDOW_NAME: &str = "PPU pattern table";
-const NES_SCREEN_WIDTH: u32 = 256;
-const NES_SCREEN_HEIGHT: u32 = 240;
-const WINDOW_WIDTH_MUL: u32 = 5;
-const WINDOW_HEIGHT_MUL: u32 = 3;
-const WINDOW_WIDTH: u32 = NES_SCREEN_WIDTH * WINDOW_WIDTH_MUL;
-const WINDOW_HEIGHT: u32 = NES_SCREEN_HEIGHT * WINDOW_HEIGHT_MUL;
-
-// for some reason textures are repeating every 120 bytes
-fn dump_texture_buf(buf: &[u8], px_size: usize) {
-    let width = 128;
-
-    let mut s = String::new();
-    for idx in (0..buf.len()).step_by(px_size) {
-        if idx % (width * px_size) == 0 {
-            s.push('\n');
-        }
-
-        let val = buf[idx];
-        if val != buf[idx + 1] || val != buf[idx + 2] {
-            s.push('#');
-        } else {
-            match val {
-                85 | 170 | 255 => s.push(char::from_digit((val / 85) as u32, 10).unwrap()),
-                0 => s.push('.'),
-                _ => s.push('?'),
-            }
-        }
-    }
-
-    println!("\nTiles:\n{}", &s);
-}
-
-// This is safe since I know that the underlying data is valid and contiguous
-fn to_sdl2_slice(slice: &[u32]) -> &[u8] {
-    unsafe { from_raw_parts(slice.as_ptr() as *const u8, slice.len() * 4 as usize) }
-}
 
 pub struct PPU {
     game: Cartridge,
     registers: Registers,
     flags: Flags,
-
-    canvas: WindowCanvas,
+    renderer: graphics::Renderer,
 }
 
 impl PPU {
     pub fn new(game: Cartridge) -> Self {
-        let sdl_ctx = SDL2Intrf::context();
-        let video_subsystem = sdl_ctx.video().unwrap();
-
-        let mut window = video_subsystem
-            .window(WINDOW_NAME, WINDOW_WIDTH, WINDOW_HEIGHT)
-            .position_centered()
-            .build()
-            .unwrap();
-        window
-            .set_display_mode(Some(DisplayMode::new(
-                PixelFormatEnum::RGB888,
-                WINDOW_WIDTH as i32,
-                WINDOW_HEIGHT as i32,
-                30,
-            )))
-            .unwrap();
-
-        let mut canvas = window.into_canvas().build().unwrap();
-        canvas.clear();
-
         PPU {
             game,
             registers: Registers::default(),
             flags: Flags::default(),
-            canvas,
+            renderer: graphics::Renderer::new(),
         }
     }
 
-    pub fn register_write(&mut self, addr: u16, val: u8) {
+    // TODO: Being able to unify this code for mutable and immutable types would be great
+    fn get_reg_mut(&mut self, addr: u16) -> &mut u8 {
         match (addr - 0x2000) % 8 {
-            0 => self.registers.ctrl = PpuCtrl::from_bits(val).expect("All bits covered"),
-            1 => self.registers.mask = PpuMask::from_bits(val).expect("All bits covered"),
-            2 => self.registers.status = PpuStatus::from_bits(val).expect("All bits covered"),
-            3 => self.registers.oamaddr = val,
-            4 => self.registers.oamdata = val,
-            5 => self.registers.scroll = val,
-            6 => self.registers.addr = val,
-            7 => self.registers.data = val,
+            0 => &mut self.registers.ctrl,
+            1 => &mut self.registers.mask,
+            2 => &mut self.registers.status,
+            3 => &mut self.registers.oamaddr,
+            4 => &mut self.registers.oamdata,
+            5 => &mut self.registers.scroll,
+            6 => &mut self.registers.addr,
+            7 => &mut self.registers.data,
             _ => panic!("Invalid PPU Register write: address {:X}", addr),
         }
     }
 
     pub fn register_read(&self, addr: u16) -> u8 {
         match (addr - 0x2000) % 8 {
-            0 => self.registers.ctrl.bits(),
-            1 => self.registers.mask.bits(),
-            2 => self.registers.status.bits(),
+            0 => self.registers.ctrl,
+            1 => self.registers.mask,
+            2 => self.registers.status,
             3 => self.registers.oamaddr,
             4 => self.registers.oamdata,
             5 => self.registers.scroll,
@@ -163,6 +104,10 @@ impl PPU {
             7 => self.registers.data,
             _ => panic!("Invalid PPU Register read: address {:X}", addr),
         }
+    }
+
+    pub fn register_write(&mut self, addr: u16, val: u8) {
+        *self.get_reg_mut(addr) = val;
     }
 
     pub fn clock(&mut self) {
@@ -203,6 +148,8 @@ impl PPU {
                 for px in 0..TILE_WIDTH_PX {
                     let color_idx =
                         ((low_byte >> (7 - px)) & 1) + (((high_byte >> (7 - px)) & 1) << 1);
+
+                    const COLORS: [u8; 4] = [0, 85, 170, 255];
                     let color = COLORS[color_idx as usize];
                     let buf_addr = PX_SIZE_BYTES
                         * (px as usize + ((row * WIDTH_TILES + col) * TILE_WIDTH_PX) as usize);
@@ -224,18 +171,9 @@ impl PPU {
             .collect::<Vec<_>>();
         assert_eq!(pattern_table.len(), buf.len());
 
-        // dump_texture_buf(&pattern_table, PX_SIZE_BYTES);
-
         const TEX_WIDTH_PX: u32 = 2 * (WIDTH_TILES * TILE_WIDTH_PX) as u32;
         const TEX_HEIGHT_PX: u32 = HEIGHT_PX as u32 / 2;
-        let creator = self.canvas.texture_creator();
-        let mut texture = creator
-            .create_texture(None, TextureAccess::Streaming, TEX_WIDTH_PX, TEX_HEIGHT_PX)
-            .unwrap();
-
-        const PITCH_BYTES: usize = PX_SIZE_BYTES * TEX_WIDTH_PX as usize;
-        texture.update(None, &pattern_table, PITCH_BYTES).unwrap();
-        self.canvas.copy(&texture, None, None).unwrap();
-        self.canvas.present();
+        self.renderer
+            .render_screen_raw(&pattern_table, TEX_WIDTH_PX, TEX_HEIGHT_PX);
     }
 }

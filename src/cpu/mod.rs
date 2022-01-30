@@ -372,14 +372,6 @@ impl<BusType: Bus> CPU<BusType> {
         }
     }
 
-    fn write_memory(&mut self, addr: TargetAddress, val: u8) {
-        match addr {
-            TargetAddress::Memory(addr) => self.bus.write(addr, val),
-            TargetAddress::Accumulator => self.acc = val,
-            TargetAddress::None => panic!("Writing to invalid target address"),
-        }
-    }
-
     fn get_operand(&mut self) -> u8 {
         use instructions::AddressingMode::*;
         match &self.instruction.mode() {
@@ -389,6 +381,14 @@ impl<BusType: Bus> CPU<BusType> {
                 let addr = self.calc_addr();
                 self.bus.read(addr)
             }
+        }
+    }
+
+    fn write_memory(&mut self, addr: TargetAddress, val: u8) {
+        match addr {
+            TargetAddress::Memory(addr) => self.bus.write(addr, val),
+            TargetAddress::Accumulator => self.acc = val,
+            TargetAddress::None => panic!("Writing to invalid target address"),
         }
     }
 
