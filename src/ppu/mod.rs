@@ -56,10 +56,11 @@ use sdl2::pixels::{Color, PixelFormatEnum};
 use sdl2::rect::Rect;
 use sdl2::render::{TextureAccess, WindowCanvas};
 use sdl2::surface::Surface;
+use sdl2::video::DisplayMode;
 use std::mem::size_of;
 use std::slice::from_raw_parts;
 
-const COLORS: [u8; 4] = [0, 63, 124, 255];
+const COLORS: [u8; 4] = [0, 85, 170, 255];
 const WINDOW_NAME: &str = "PPU pattern table";
 const NES_SCREEN_WIDTH: u32 = 256;
 const NES_SCREEN_HEIGHT: u32 = 240;
@@ -68,9 +69,34 @@ const WINDOW_HEIGHT_MUL: u32 = 3;
 const WINDOW_WIDTH: u32 = NES_SCREEN_WIDTH * WINDOW_WIDTH_MUL;
 const WINDOW_HEIGHT: u32 = NES_SCREEN_HEIGHT * WINDOW_HEIGHT_MUL;
 
+// for some reason textures are repeating every 120 bytes
+fn dump_texture_buf(buf: &[u8], px_size: usize) {
+    let width = 128;
+
+    let mut s = String::new();
+    for idx in (0..buf.len()).step_by(px_size) {
+        if idx % (width * px_size) == 0 {
+            s.push('\n');
+        }
+
+        let val = buf[idx];
+        if val != buf[idx + 1] || val != buf[idx + 2] {
+            s.push('#');
+        } else {
+            match val {
+                85 | 170 | 255 => s.push(char::from_digit((val / 85) as u32, 10).unwrap()),
+                0 => s.push('.'),
+                _ => s.push('?'),
+            }
+        }
+    }
+
+    println!("\nTiles:\n{}", &s);
+}
+
 // This is safe since I know that the underlying data is valid and contiguous
-unsafe fn to_sdl2_slice(slice: &[u32]) -> &[u8] {
-    from_raw_parts(slice.as_ptr() as *const u8, slice.len() * 4 as usize)
+fn to_sdl2_slice(slice: &[u32]) -> &[u8] {
+    unsafe { from_raw_parts(slice.as_ptr() as *const u8, slice.len() * 4 as usize) }
 }
 
 pub struct PPU {
@@ -86,10 +112,18 @@ impl PPU {
         let sdl_ctx = SDL2Intrf::context();
         let video_subsystem = sdl_ctx.video().unwrap();
 
-        let window = video_subsystem
+        let mut window = video_subsystem
             .window(WINDOW_NAME, WINDOW_WIDTH, WINDOW_HEIGHT)
             .position_centered()
             .build()
+            .unwrap();
+        window
+            .set_display_mode(Some(DisplayMode::new(
+                PixelFormatEnum::RGB888,
+                WINDOW_WIDTH as i32,
+                WINDOW_HEIGHT as i32,
+                30,
+            )))
             .unwrap();
 
         let mut canvas = window.into_canvas().build().unwrap();
@@ -133,39 +167,75 @@ impl PPU {
 
     pub fn clock(&mut self) {
         self.flags.odd = !self.flags.odd;
+        self.show_pattern_table();
+    }
 
-        let mut buf = vec![0_u8; 3 * 128 * 256];
+    fn show_pattern_table(&mut self) {
+        const TILE_WIDTH_PX: u16 = 8;
+        const TILE_HEIGHT_PX: u16 = 8;
+        const PX_SIZE_BYTES: usize = 4; // 4th byte for the pixel is unused
+        const HEIGHT_PX: u16 = 256;
+        const WIDTH_TILES: u16 = 16;
+        const WIDTH_PX: u16 = WIDTH_TILES * TILE_WIDTH_PX;
+        const BUF_SIZE_BYTES: usize = PX_SIZE_BYTES * (HEIGHT_PX as usize) * (WIDTH_PX as usize);
 
-        for row in 0..256 {
-            for col in 0..128 {
-                let addr = (row / 8 * 0x100) + (row % 8) + (col / 8) * 0x10;
-                let low_bits = self.game.chr_read(addr);
-                let high_bits = self.game.chr_read(addr + 8);
-                let value =
-                    ((low_bits >> (7 - (col % 8))) & 1) + ((high_bits >> (7 - (col % 8))) & 1) * 2;
-                let value = COLORS[value as usize];
-                let buf_addr = (row as usize * 128 * 3) + (col as usize * 3);
+        let mut buf = vec![0_u8; BUF_SIZE_BYTES];
 
-                buf[buf_addr] = value;
-                buf[buf_addr + 1] = value;
-                buf[buf_addr + 2] = value;
+        // The pattern table has a tile adjacent in memory, while SDL renders entire rows. When
+        // reading the pattern table we need to add an offset that is the tile number
+        //
+        // Concretely, the first row of the SDL texture contains the first row of 16 tiles, which
+        // are actually offset 16 bytes from each other. Display the tiles side-by-side so we have
+        for row in 0..HEIGHT_PX {
+            for col in 0..WIDTH_TILES {
+                let tile_num_down = row / TILE_HEIGHT_PX;
+                let row_offset = row % TILE_HEIGHT_PX;
+
+                const TILE_SIZE_BYTES: u16 = 16;
+                let chr_addr = row_offset
+                    + (col * TILE_SIZE_BYTES)
+                    + (tile_num_down * TILE_SIZE_BYTES * WIDTH_TILES);
+
+                const HIGH_OFFSET_BYTES: u16 = 8;
+                let low_byte = self.game.chr_read(chr_addr);
+                let high_byte = self.game.chr_read(chr_addr + HIGH_OFFSET_BYTES);
+
+                for px in 0..TILE_WIDTH_PX {
+                    let color_idx =
+                        ((low_byte >> (7 - px)) & 1) + (((high_byte >> (7 - px)) & 1) << 1);
+                    let color = COLORS[color_idx as usize];
+                    let buf_addr = PX_SIZE_BYTES
+                        * (px as usize + ((row * WIDTH_TILES + col) * TILE_WIDTH_PX) as usize);
+
+                    // Assign all pixels as the same color value so we get a grayscale version
+                    buf[buf_addr..(buf_addr + PX_SIZE_BYTES)]
+                        .swap_with_slice(&mut [color; PX_SIZE_BYTES]);
+                }
             }
         }
 
+        // Format pattern table s.t. 0x000-0x0FFF are on the left and 0x1000-0x1FFF are on the
+        // right
+        const HALF: usize = BUF_SIZE_BYTES / 2;
+        let pattern_table = buf[0..HALF]
+            .chunks(WIDTH_PX as usize * PX_SIZE_BYTES)
+            .zip(buf[HALF..].chunks(WIDTH_PX as usize * PX_SIZE_BYTES))
+            .flat_map(|(l, r)| [l, r].concat())
+            .collect::<Vec<_>>();
+        assert_eq!(pattern_table.len(), buf.len());
+
+        // dump_texture_buf(&pattern_table, PX_SIZE_BYTES);
+
+        const TEX_WIDTH_PX: u32 = 2 * (WIDTH_TILES * TILE_WIDTH_PX) as u32;
+        const TEX_HEIGHT_PX: u32 = HEIGHT_PX as u32 / 2;
         let creator = self.canvas.texture_creator();
         let mut texture = creator
-            .create_texture(
-                Some(PixelFormatEnum::RGB888),
-                TextureAccess::Streaming,
-                96, // This should be 128 ...
-                256,
-            )
+            .create_texture(None, TextureAccess::Streaming, TEX_WIDTH_PX, TEX_HEIGHT_PX)
             .unwrap();
 
-        texture.update(None, &buf, 128 * 3).unwrap();
-
-        let rect = Rect::new(256, 0, 128 * 2, 256 * 2);
-        self.canvas.copy(&texture, None, Some(rect)).unwrap();
+        const PITCH_BYTES: usize = PX_SIZE_BYTES * TEX_WIDTH_PX as usize;
+        texture.update(None, &pattern_table, PITCH_BYTES).unwrap();
+        self.canvas.copy(&texture, None, None).unwrap();
         self.canvas.present();
     }
 }

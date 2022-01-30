@@ -6,11 +6,11 @@ extern crate bitflags;
 mod apu;
 mod bus;
 pub mod cartridge;
+mod common;
 mod controller;
 mod cpu;
 mod debug;
 mod memory;
-mod common;
 pub mod ppu;
 pub mod sdl_interface;
 

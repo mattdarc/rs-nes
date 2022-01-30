@@ -25,5 +25,5 @@ harness = false
 # See more keys and their definitions at https://doc.rust-lang.org/cargo/reference/manifest.html
 
 [dependencies]
-sdl2 = "0.32.2"
-bitflags = "1.2.1"
+sdl2 = "0.32"
+bitflags = "1.2"
