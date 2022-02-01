@@ -1,3 +1,4 @@
+#[derive(Clone, Copy)]
 pub enum Priority {
     Foreground,
     Background,
@@ -9,6 +10,7 @@ pub enum Size {
     Small,
 }
 
+#[derive(Clone, Copy)]
 pub struct Sprite {
     x: u8,
     y: u8,
@@ -19,11 +21,15 @@ pub struct Sprite {
     vert_flip: bool,
     horiz_flip: bool,
 
-    bytes: Vec<u8>,
+    bytes: [u8; 4],
 }
 
 impl Sprite {
     pub const BYTES_PER: usize = 4;
+
+    pub fn default() -> Self {
+        Sprite::from([0_u8; 4].as_slice())
+    }
 
     pub fn size(size: Size) -> i32 {
         match size {
@@ -88,6 +94,10 @@ impl std::convert::From<&[u8]> for Sprite {
         };
         let horiz_flip = bytes[2] & 0x40 != 0;
         let vert_flip = bytes[2] & 0x80 != 0;
+        let mut bytes_arr = [0; 4];
+        for i in 0..4 {
+            bytes_arr[i] = bytes[i];
+        }
         Sprite {
             x,
             y,
@@ -98,7 +108,7 @@ impl std::convert::From<&[u8]> for Sprite {
             vert_flip,
             horiz_flip,
 
-            bytes: bytes.to_owned(),
+            bytes: bytes_arr,
         }
     }
 }

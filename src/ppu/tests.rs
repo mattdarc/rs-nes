@@ -6,6 +6,8 @@ use venus::ppu::PPU;
 use venus::sdl_interface::SDL2Intrf;
 
 fn main() {
+    return;
+
     let game = Cartridge::load("donkey-kong.nes").expect("Failed to load ROM");
     let mut ppu = PPU::new(game);
 
@@ -23,7 +25,7 @@ fn main() {
             }
         }
 
-        ppu.clock();
+        ppu.clock(1);
         ::std::thread::sleep(Duration::new(0, venus::graphics::FRAME_RATE_NS));
     }
 }

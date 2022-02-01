@@ -1,4 +1,4 @@
-mod header;
+pub mod header;
 mod mapper;
 
 use header::Header;
@@ -15,11 +15,13 @@ pub trait CartridgeInterface {
     fn prg_write(&self, addr: u16, val: u8);
     fn chr_read(&self, addr: u16) -> u8;
     fn chr_write(&self, addr: u16, val: u8);
+    fn header(&self) -> Header;
 }
 
 #[derive(Debug, Default, Clone)]
 pub struct CartridgeImpl {
     name: String,
+    header: Header,
 
     // This may not need to be a box - we can instantiate a new type for each mapper fine
     mapper: Box<dyn Mapper>,
@@ -43,6 +45,7 @@ impl CartridgeInterface for Cartridge {
 
         let mapper = create_mapper(&header, &data);
         Ok(RefCell::new(CartridgeImpl {
+            header,
             name: filename.to_owned(),
             mapper,
         }))
@@ -62,6 +65,10 @@ impl CartridgeInterface for Cartridge {
 
     fn chr_write(&self, addr: u16, val: u8) {
         self.borrow_mut().mapper.chr_write(addr, val);
+    }
+
+    fn header(&self) -> Header {
+        self.borrow().header.clone()
     }
 }
 

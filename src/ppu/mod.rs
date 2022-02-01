@@ -47,24 +47,58 @@ the right.
 
 mod flags;
 mod registers;
+mod sprite;
 
+use crate::cartridge::header::Mirroring;
 use crate::cartridge::{Cartridge, CartridgeInterface};
+use crate::memory::RAM;
 use crate::sdl_interface::graphics;
-use crate::sdl_interface::SDL2Intrf;
 use flags::*;
 use registers::*;
-use sdl2::pixels::{Color, PixelFormatEnum};
-use sdl2::rect::Rect;
-use sdl2::render::{TextureAccess, WindowCanvas};
-use sdl2::surface::Surface;
-use std::mem::size_of;
-use std::slice::from_raw_parts;
+use sprite::Sprite;
+
+const SCANLINES_PER_FRAME: i16 = 262;
+const VISIBLE_SCANLINES: i16 = 241;
+const CYCLES_PER_SCANLINE: i16 = 341;
 
 pub struct PPU {
     game: Cartridge,
     registers: Registers,
     flags: Flags,
+    vram: RAM,
+    palette_table: [u8; 32],
     renderer: graphics::Renderer,
+    // Sprites
+    oam_primary: [Sprite; 64],
+    oam_secondary: [Sprite; 8],
+    //sprite_pattern_table: [u16; 8],
+    //sprite_attrs: [u8; 8],
+    //sprite_x_pos: [u16; 8],
+
+    // Background
+    //pattern_table_regs: [u16; 2],
+    //palette_attr_regs: [u16; 2],
+    cycle: i16,
+    scanline: i16,
+}
+
+/// Mirror the provided address according to the Mirroring `mirror`
+///
+/// Horizontal:
+///   [ A ] [ a ]
+///   [ B ] [ b ]
+///
+/// Vertical:
+///   [ A ] [ B ]
+///   [ a ] [ b ]
+fn mirror(mirror: &Mirroring, addr: u16) -> u16 {
+    match mirror {
+        // AABB
+        Mirroring::Horizontal => addr & 0xBFF,
+
+        // ABAB
+        Mirroring::Vertical => addr & 0x7FF,
+    }
 }
 
 impl PPU {
@@ -74,21 +108,12 @@ impl PPU {
             registers: Registers::default(),
             flags: Flags::default(),
             renderer: graphics::Renderer::new(),
-        }
-    }
-
-    // TODO: Being able to unify this code for mutable and immutable types would be great
-    fn get_reg_mut(&mut self, addr: u16) -> &mut u8 {
-        match (addr - 0x2000) % 8 {
-            0 => &mut self.registers.ctrl,
-            1 => &mut self.registers.mask,
-            2 => &mut self.registers.status,
-            3 => &mut self.registers.oamaddr,
-            4 => &mut self.registers.oamdata,
-            5 => &mut self.registers.scroll,
-            6 => &mut self.registers.addr,
-            7 => &mut self.registers.data,
-            _ => panic!("Invalid PPU Register write: address {:X}", addr),
+            oam_primary: [Sprite::default(); 64],
+            oam_secondary: [Sprite::default(); 8],
+            palette_table: [0; 32],
+            cycle: 0,
+            scanline: -1,
+            vram: RAM::with_size(0x3000),
         }
     }
 
@@ -100,19 +125,86 @@ impl PPU {
             3 => self.registers.oamaddr,
             4 => self.registers.oamdata,
             5 => self.registers.scroll,
-            6 => self.registers.addr,
+            6 => panic!("Cannot read PPU address!"),
             7 => self.registers.data,
             _ => panic!("Invalid PPU Register read: address {:X}", addr),
         }
     }
 
-    pub fn register_write(&mut self, addr: u16, val: u8) {
-        *self.get_reg_mut(addr) = val;
+    fn vram_read(&mut self, addr: u16) -> u8 {
+        let addr = mirror(self.game.header().get_mirroring(), addr - 0x2000);
+        self.vram.read(addr)
     }
 
-    pub fn clock(&mut self) {
-        self.flags.odd = !self.flags.odd;
-        self.show_pattern_table();
+    fn ppu_read(&mut self) -> u8 {
+        let addr: u16 = self.registers.addr.into();
+        let incr_amount = if self.registers.ctrl & PpuCtrl::VRAM_INCR != 0 {
+            32
+        } else {
+            1
+        };
+        self.registers.addr.incr(incr_amount);
+
+        match addr {
+            0..=0x1FFF => self.game.chr_read(addr),
+            0x2000..=0x2FFF => self.vram_read(addr),
+            0x3F00..=0x3FFF => self.palette_table[(addr - 0x3F00) as usize],
+            _ => panic!("Read from out of range address 0x{:X}!", addr),
+        }
+    }
+
+    pub fn register_write(&mut self, addr: u16, val: u8) {
+        match (addr - 0x2000) % 8 {
+            0 => self.registers.ctrl = val,
+            1 => self.registers.mask = val,
+            2 => self.registers.status = val,
+            3 => self.registers.oamaddr = val,
+            4 => self.registers.oamdata = val,
+            5 => self.registers.scroll = val,
+            6 => self.registers.addr.write(val),
+            7 => self.registers.data = val,
+            _ => panic!("Invalid PPU Register write: address {:X}", addr),
+        }
+    }
+
+    fn is_sprite0_hit(&self) -> bool {
+        let sprites_enabled = self.registers.mask & PpuMask::SHOW_SPRITES != 0;
+        let show_clipped_lhs =
+            self.registers.mask & (PpuMask::SHOW_LEFT_BG | PpuMask::SHOW_LEFT_SPRITES) != 0
+                && self.oam_primary[0].x() <= 7;
+        let past_rhs = self.oam_primary[0].x() == 255;
+        let sprite0_hit_occurred = self.registers.status & PpuStatus::SPRITE_0_HIT != 0;
+        sprites_enabled && show_clipped_lhs && !past_rhs && !sprite0_hit_occurred
+    }
+
+    pub fn clock(&mut self, ticks: i16) {
+        self.cycle += ticks;
+        if self.cycle < CYCLES_PER_SCANLINE {
+            return;
+        }
+
+        if self.is_sprite0_hit() {
+            self.registers.status |= PpuStatus::SPRITE_0_HIT;
+        }
+        self.cycle -= CYCLES_PER_SCANLINE;
+        self.scanline += 1;
+
+        if self.scanline == VISIBLE_SCANLINES {
+            // End of frame, restart new frame
+            self.registers.status |= PpuStatus::VBLANK_STARTED;
+            self.registers.status &= !PpuStatus::SPRITE_0_HIT;
+            if self.registers.ctrl & PpuCtrl::NMI_ENABLE != 0 {
+                self.flags.has_nmi = true;
+            }
+        }
+
+        if self.scanline == SCANLINES_PER_FRAME {
+            self.scanline = 0;
+            self.flags.has_nmi = false;
+            self.registers.status &= !PpuStatus::SPRITE_0_HIT;
+            self.registers.status &= !PpuStatus::VBLANK_STARTED;
+            self.flags.odd = !self.flags.odd;
+        }
     }
 
     fn show_pattern_table(&mut self) {
@@ -175,5 +267,26 @@ impl PPU {
         const TEX_HEIGHT_PX: u32 = HEIGHT_PX as u32 / 2;
         self.renderer
             .render_screen_raw(&pattern_table, TEX_WIDTH_PX, TEX_HEIGHT_PX);
+    }
+}
+
+#[cfg(test)]
+mod test {
+    use super::*;
+
+    #[test]
+    fn nametable_mirroring() {
+        assert_eq!(mirror(&Mirroring::Vertical, 0x0000), 0x0000);
+        assert_eq!(mirror(&Mirroring::Vertical, 0x0400), 0x0400);
+        assert_eq!(mirror(&Mirroring::Vertical, 0x0038), 0x0038);
+        assert_eq!(mirror(&Mirroring::Vertical, 0x0438), 0x0438);
+        assert_eq!(mirror(&Mirroring::Vertical, 0x0801), 0x0001);
+
+        assert_eq!(mirror(&Mirroring::Horizontal, 0x0000), 0x0000);
+        assert_eq!(mirror(&Mirroring::Horizontal, 0x0400), 0x0000);
+        assert_eq!(mirror(&Mirroring::Horizontal, 0x0038), 0x0038);
+        assert_eq!(mirror(&Mirroring::Horizontal, 0x0438), 0x0038);
+        assert_eq!(mirror(&Mirroring::Horizontal, 0x0838), 0x0838);
+        assert_eq!(mirror(&Mirroring::Horizontal, 0x0C38), 0x0838);
     }
 }

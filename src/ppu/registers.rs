@@ -1,40 +1,34 @@
 #![allow(non_snake_case)]
-bitflags! {
-    #[derive(Default)]
-    pub struct PpuCtrl: u8 {
-        const NMI_ENABLE        = 0x80;
-        const SLAVE_SELECT      = 0x40;
-        const SPRITE_SIZE       = 0x20;
-        const BG_TABLE_ADDR     = 0x10;
-        const SPRITE_TABLE_ADDR = 0x08;
-        const VRAM_INCR         = 0x04;
-        const NAMETABLE_ADDR    = 0x03;
-    }
+
+pub struct PpuCtrl;
+impl PpuCtrl {
+    pub const NMI_ENABLE: u8 = 0x80;
+    pub const SLAVE_SELECT: u8 = 0x40;
+    pub const SPRITE_SIZE: u8 = 0x20;
+    pub const BG_TABLE_ADDR: u8 = 0x10;
+    pub const SPRITE_TABLE_ADDR: u8 = 0x08;
+    pub const VRAM_INCR: u8 = 0x04;
+    pub const NAMETABLE_ADDR: u8 = 0x03;
 }
 
-bitflags! {
-    #[derive(Default)]
-    pub struct PpuMask: u8 {
-        const EMPH_BLUE = 0x80;
-        const EMPH_GREEN = 0x40;
-        const EMPH_RED   = 0x20;
-        const SHOW_SPRITES = 0x10;
-        const SHOW_BG = 0x08;
-        const SHOW_LEFT_SPRITES = 0x04;
-        const SHOW_LEFT_BG = 0x02;
-        const GRAYSCALE = 0x01;
-
-    }
+pub struct PpuMask;
+impl PpuMask {
+    pub const EMPH_BLUE: u8 = 0x80;
+    pub const EMPH_GREEN: u8 = 0x40;
+    pub const EMPH_RED: u8 = 0x20;
+    pub const SHOW_SPRITES: u8 = 0x10;
+    pub const SHOW_BG: u8 = 0x08;
+    pub const SHOW_LEFT_SPRITES: u8 = 0x04;
+    pub const SHOW_LEFT_BG: u8 = 0x02;
+    pub const GRAYSCALE: u8 = 0x01;
 }
 
-bitflags! {
-    #[derive(Default)]
-    pub struct PpuStatus: u8 {
-        const VBLANK_STARTED = 0x80;
-        const SPRITE_0_HIT = 0x40;
-        const SPRITE_OVERFLOW = 0x20;
-        const PREV_LSB = 0x1F;
-    }
+pub struct PpuStatus;
+impl PpuStatus {
+    pub const VBLANK_STARTED: u8 = 0x80;
+    pub const SPRITE_0_HIT: u8 = 0x40;
+    pub const SPRITE_OVERFLOW: u8 = 0x20;
+    pub const PREV_LSB: u8 = 0x1F;
 }
 
 #[derive(Default)]
@@ -45,6 +39,26 @@ pub struct Registers {
     pub oamaddr: u8,
     pub oamdata: u8,
     pub scroll: u8,
-    pub addr: u8,
+    pub addr: PpuAddr,
     pub data: u8,
+}
+
+#[derive(Default, Clone, Copy, Debug)]
+pub struct PpuAddr(u16);
+
+impl PpuAddr {
+    pub fn write(&mut self, val: u8) {
+        // 0x0000 - 0x3FFF mirrored at greater addresses
+        self.0 = ((self.0 << 8) | (val as u16)) & 0x3FFF;
+    }
+
+    pub fn incr(&mut self, amt: u16) {
+        self.0 = (self.0 + amt) & 0x3FFF;
+    }
+}
+
+impl std::convert::Into<u16> for PpuAddr {
+    fn into(self) -> u16 {
+        self.0
+    }
 }

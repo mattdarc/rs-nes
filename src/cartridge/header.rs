@@ -45,6 +45,10 @@ impl Header {
     pub fn get_mapper_num(&self) -> u8 {
         self.mapper_num
     }
+
+    pub fn get_mirroring(&self) -> &Mirroring {
+        &self.mirroring
+    }
 }
 
 impl std::convert::From<&[u8; 16]> for Header {
