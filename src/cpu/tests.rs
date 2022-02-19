@@ -39,7 +39,11 @@ impl Bus for TestBus {
         0
     }
 
-    fn clock(&mut self) {}
+    fn clock(&mut self, _cycles: u8) {}
+
+    fn get_nmi(&mut self) -> Option<u8> {
+        None
+    }
 }
 
 fn initialize_program(data: &[u8]) -> CPU<TestBus> {
@@ -74,17 +78,14 @@ macro_rules! verify_op {
 	// Init and keep track of PC
 	let pc_bef = cpu.pc;
 
-	// Make sure we run for the correct number of no-op cycles
-	// and exit normally
-    for _ in 0..act_instr.cycles() {
-	    cpu.clock();
-    }
+	// Make sure we run for the correct number cycles
+	cpu.clock();
 
 	// Verify CPU state
 	assert_eq!(cpu.pc - pc_bef, act_instr.size(), "PC did not retrieve the correct number of bytes");
 	$(assert_eq!(cpu.$eflg, $ev, "Flag mismatch $eflg");)*
 	$(assert_eq!(cpu.bus.read($exp_addr), $exp_b, "Memory at {:#X} does not match {:#}", $exp_addr, $exp_b);)*
-	assert_eq!(cpu.cycles_left, 0);
+	assert_eq!(cpu.cycles, act_instr.cycles());
     }
 }
 
@@ -102,15 +103,12 @@ macro_rules! verify_branch {
 	$(cpu.$reg = $pv;)*
 	$(cpu.bus.write($addr, $val);)*
 
-	// Make sure we run for the correct number of no-op cycles
-	// and exit normally
-	for _ in 0..($extra_cycles + act_instr.cycles()) {
-        cpu.clock();
-    }
+	// Make sure we run for the correct number cycles
+    cpu.clock();
 
 	// Verify CPU state
 	$(assert_eq!(cpu.$eflg, $ev, "Flag mismatch $eflg");)*
-	assert_eq!(cpu.cycles_left, 0);
+	assert_eq!(cpu.cycles, $extra_cycles + act_instr.cycles());
     }
 }
 

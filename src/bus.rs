@@ -21,7 +21,8 @@ pub trait Bus {
         v
     }
     fn cycles(&self) -> usize;
-    fn clock(&mut self);
+    fn clock(&mut self, cycles: u8);
+    fn get_nmi(&mut self) -> Option<u8>;
 }
 
 pub struct NesBus {
@@ -32,6 +33,7 @@ pub struct NesBus {
     _apu: APU,
     cpu_ram: RAM,
     cycles: usize,
+    nmi: Option<u8>,
 
     cpu_test_enabled: bool,
 }
@@ -45,6 +47,7 @@ impl NesBus {
             ppu: PPU::new(game),
             _apu: APU::new(),
             cpu_ram: RAM::with_size(2048),
+            nmi: None,
 
             cycles: 7,
             cpu_test_enabled: false,
@@ -97,8 +100,17 @@ impl Bus for NesBus {
         self.cycles
     }
 
-    fn clock(&mut self) {
-        self.cycles += 1;
+    fn clock(&mut self, cycles: u8) {
+        self.cycles += cycles as usize;
         //self.ppu.clock();
+        if self.ppu.generate_nmi() {
+            self.nmi = Some(1);
+        }
+    }
+
+    fn get_nmi(&mut self) -> Option<u8> {
+        let nmi = self.nmi;
+        self.nmi = None;
+        nmi
     }
 }

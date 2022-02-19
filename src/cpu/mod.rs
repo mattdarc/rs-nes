@@ -25,6 +25,7 @@ fn crosses_page(src: u16, dst: u16) -> bool {
 }
 
 const STACK_BEGIN: u16 = 0x0100;
+const IRQ_HANDLER_ADDR: u16 = 0xFFFA;
 pub const NTSC_CLOCK: u32 = 1_789_773;
 pub const PAL_CLOCK: u32 = 1_662_607;
 pub const RESET_VECTOR_START: u16 = 0xFFFC;
@@ -47,7 +48,7 @@ pub struct CPU<BusType: Bus> {
     // cache them in the NES for logging
     operands: [u8; 2],
     instruction: Instruction,
-    cycles_left: usize,
+    cycles: u8,
     exit: bool,
     log_file: Option<File>,
     logging_enabled: bool,
@@ -66,7 +67,7 @@ impl<BusType: Bus> CPU<BusType> {
             instruction: Instruction::nop(),
             exit: false,
             operands: [0; 2],
-            cycles_left: 0,
+            cycles: 0,
 
             log_file: None,
             logging_enabled: false,
@@ -89,12 +90,12 @@ impl<BusType: Bus> CPU<BusType> {
     }
 
     pub fn clock(&mut self) -> bool {
-        if self.cycles_left == 0 {
-            self.execute_instruction();
+        self.execute_instruction();
+        if let Some(status) = self.bus.get_nmi() {
+            self.handle_nmi(status);
         }
 
-        self.cycles_left -= 1;
-        self.bus.clock();
+        self.bus.clock(self.cycles);
         self.exit
     }
 
@@ -147,6 +148,16 @@ impl<BusType: Bus> CPU<BusType> {
             .unwrap();
     }
 
+    fn handle_nmi(&mut self, _status: u8) {
+        self.push16(self.pc);
+        self.push8(self.status.bits());
+        self.status.set(Status::INT_DISABLE, true);
+
+        // Load address of interrupt handler, set PC to execute there
+        self.bus.clock(2);
+        self.pc = self.bus.read16(IRQ_HANDLER_ADDR);
+    }
+
     fn execute_instruction(&mut self) {
         use instructions::InstrName::*;
 
@@ -154,7 +165,7 @@ impl<BusType: Bus> CPU<BusType> {
         self.instruction = instructions::get_instruction(opcode);
 
         // 1 cycle we use to execute the instruction
-        self.cycles_left = self.instruction.cycles() as usize;
+        self.cycles = self.instruction.cycles();
 
         debug_print!("\n==== Executing instruction {:?} ====", &self.instruction);
 
@@ -290,7 +301,7 @@ impl<BusType: Bus> CPU<BusType> {
         debug_print!("-- Taking branch from {:#X} to {:#X}", self.pc, pc);
 
         // add 1 if same page, 2 if different
-        self.cycles_left += 1 + crosses_page(self.pc, pc) as usize;
+        self.cycles += 1 + crosses_page(self.pc, pc) as u8;
         self.pc = pc;
     }
 
@@ -349,14 +360,14 @@ impl<BusType: Bus> CPU<BusType> {
                 let addr_without_offset = concat_bytes(low_byte, high_byte);
                 let addr = addr_without_offset.wrapping_add(self.x as u16);
 
-                self.cycles_left += self.takes_extra_cycle(addr_without_offset, addr) as usize;
+                self.cycles += self.takes_extra_cycle(addr_without_offset, addr) as u8;
                 addr
             }
             AbsoluteY => {
                 let addr_without_offset = concat_bytes(low_byte, high_byte);
                 let addr = addr_without_offset.wrapping_add(self.y as u16);
 
-                self.cycles_left += self.takes_extra_cycle(addr_without_offset, addr) as usize;
+                self.cycles += self.takes_extra_cycle(addr_without_offset, addr) as u8;
                 addr
             }
             Indirect => self.bus.read16(concat_bytes(low_byte, high_byte)),
@@ -365,7 +376,7 @@ impl<BusType: Bus> CPU<BusType> {
                 let addr_without_offset = self.bus.read16(low_byte as u16);
                 let addr = addr_without_offset.wrapping_add(self.y as u16);
 
-                self.cycles_left += self.takes_extra_cycle(addr_without_offset, addr) as usize;
+                self.cycles += self.takes_extra_cycle(addr_without_offset, addr) as u8;
                 addr
             }
             _ => u16::MAX,

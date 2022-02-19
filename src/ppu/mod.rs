@@ -207,6 +207,28 @@ impl PPU {
         }
     }
 
+    fn get_nametable_addr(&self) -> u16 {
+        match self.registers.ctrl & PpuCtrl::NAMETABLE_ADDR {
+            0 => 0x2000,
+            1 => 0x2400,
+            2 => 0x2800,
+            3 => 0x2C00,
+            _ => unreachable!("Nametable address should be 2 bits!"),
+        }
+    }
+
+    fn get_pattable_addr(&self) -> u16 {
+        match self.registers.ctrl & PpuCtrl::BG_TABLE_ADDR {
+            0 => 0x0000,
+            1 => 0x1000,
+            _ => unreachable!("Pattern table address should be 1 bit!"),
+        }
+    }
+
+    pub fn generate_nmi(&self) -> bool {
+        self.flags.has_nmi
+    }
+
     fn show_pattern_table(&mut self) {
         const TILE_WIDTH_PX: u16 = 8;
         const TILE_HEIGHT_PX: u16 = 8;
