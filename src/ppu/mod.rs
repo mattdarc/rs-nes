@@ -167,14 +167,44 @@ impl PPU {
         }
     }
 
+    fn show_clipped_lhs(&self) -> bool {
+        self.registers.mask & (PpuMask::SHOW_LEFT_BG | PpuMask::SHOW_LEFT_SPRITES) != 0
+            && self.oam_primary[0].x() <= 7
+    }
+
+    fn sprite0_past_rhs(&self) -> bool {
+        self.oam_primary[0].x() == 255
+    }
+
+    fn sprites_enabled(&self) -> bool {
+        self.registers.mask & PpuMask::SHOW_SPRITES != 0
+    }
+
+    fn has_sprite0_hit(&self) -> bool {
+        self.registers.status & PpuStatus::SPRITE_0_HIT != 0
+    }
+
     fn is_sprite0_hit(&self) -> bool {
-        let sprites_enabled = self.registers.mask & PpuMask::SHOW_SPRITES != 0;
-        let show_clipped_lhs =
-            self.registers.mask & (PpuMask::SHOW_LEFT_BG | PpuMask::SHOW_LEFT_SPRITES) != 0
-                && self.oam_primary[0].x() <= 7;
-        let past_rhs = self.oam_primary[0].x() == 255;
-        let sprite0_hit_occurred = self.registers.status & PpuStatus::SPRITE_0_HIT != 0;
-        sprites_enabled && show_clipped_lhs && !past_rhs && !sprite0_hit_occurred
+        self.sprites_enabled()
+            && self.show_clipped_lhs()
+            && !self.sprite0_past_rhs()
+            && !self.has_sprite0_hit()
+    }
+
+    fn do_end_scanline(&mut self) {
+        self.registers.status |= PpuStatus::VBLANK_STARTED;
+        self.registers.status &= !PpuStatus::SPRITE_0_HIT;
+        if self.registers.ctrl & PpuCtrl::NMI_ENABLE != 0 {
+            self.flags.has_nmi = true;
+        }
+    }
+
+    fn do_end_frame(&mut self) {
+        self.scanline = 0;
+        self.flags.has_nmi = false;
+        self.registers.status &= !PpuStatus::SPRITE_0_HIT;
+        self.registers.status &= !PpuStatus::VBLANK_STARTED;
+        self.flags.odd = !self.flags.odd;
     }
 
     pub fn clock(&mut self, ticks: i16) {
@@ -186,24 +216,17 @@ impl PPU {
         if self.is_sprite0_hit() {
             self.registers.status |= PpuStatus::SPRITE_0_HIT;
         }
+
         self.cycle -= CYCLES_PER_SCANLINE;
         self.scanline += 1;
 
         if self.scanline == VISIBLE_SCANLINES {
             // End of frame, restart new frame
-            self.registers.status |= PpuStatus::VBLANK_STARTED;
-            self.registers.status &= !PpuStatus::SPRITE_0_HIT;
-            if self.registers.ctrl & PpuCtrl::NMI_ENABLE != 0 {
-                self.flags.has_nmi = true;
-            }
+            self.do_end_scanline()
         }
 
         if self.scanline == SCANLINES_PER_FRAME {
-            self.scanline = 0;
-            self.flags.has_nmi = false;
-            self.registers.status &= !PpuStatus::SPRITE_0_HIT;
-            self.registers.status &= !PpuStatus::VBLANK_STARTED;
-            self.flags.odd = !self.flags.odd;
+            self.do_end_frame()
         }
     }
 
