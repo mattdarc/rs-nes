@@ -102,7 +102,7 @@ impl Bus for NesBus {
 
     fn clock(&mut self, cycles: u8) {
         self.cycles += cycles as usize;
-        //self.ppu.clock();
+        self.ppu.clock(cycles as i16);
         if self.ppu.generate_nmi() {
             self.nmi = Some(1);
         }

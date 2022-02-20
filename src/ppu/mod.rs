@@ -60,6 +60,28 @@ use sprite::Sprite;
 const SCANLINES_PER_FRAME: i16 = 262;
 const VISIBLE_SCANLINES: i16 = 241;
 const CYCLES_PER_SCANLINE: i16 = 341;
+const TILE_WIDTH_PX: u16 = 8;
+const TILE_HEIGHT_PX: u16 = 8;
+const PX_SIZE_BYTES: usize = 4; // 4th byte for the pixel is unused
+const HEIGHT_PX: u16 = 256;
+const WIDTH_TILES: u16 = 16;
+const WIDTH_PX: u16 = WIDTH_TILES * TILE_WIDTH_PX;
+const TILE_SIZE_BYTES: u16 = 16;
+
+const FRAME_SIZE_BYTES: usize = PX_SIZE_BYTES * (HEIGHT_PX as usize) * (WIDTH_PX as usize);
+const FRAME_WIDTH_TILES: u16 = 32;
+const FRAME_HEIGHT_TILES: u16 = 30;
+
+const PALLETTE_TABLE: [u32; 64] = [
+    0x7C7C7C00, 0x0000FC00, 0x0000BC00, 0x4428BC00, 0x94008400, 0xA8002000, 0xA8100000, 0x88140000,
+    0x50300000, 0x00780000, 0x00680000, 0x00580000, 0x00405800, 0x00000000, 0x00000000, 0x00000000,
+    0xBCBCBC00, 0x0078F800, 0x0058F800, 0x6844FC00, 0xD800CC00, 0xE4005800, 0xF8380000, 0xE45C1000,
+    0xAC7C0000, 0x00B80000, 0x00A80000, 0x00A84400, 0x00888800, 0x00000000, 0x00000000, 0x00000000,
+    0xF8F8F800, 0x3CBCFC00, 0x6888FC00, 0x9878F800, 0xF878F800, 0xF8589800, 0xF8785800, 0xFCA04400,
+    0xF8B80000, 0xB8F81800, 0x58D85400, 0x58F89800, 0x00E8D800, 0x78787800, 0x00000000, 0x00000000,
+    0xFCFCFC00, 0xA4E4FC00, 0xB8B8F800, 0xD8B8F800, 0xF8B8F800, 0xF8A4C000, 0xF0D0B000, 0xFCE0A800,
+    0xF8D87800, 0xD8F87800, 0xB8F8B800, 0xB8F8D800, 0x00FCFC00, 0xF8D8F800, 0x00000000, 0x00000000,
+];
 
 pub struct PPU {
     game: Cartridge,
@@ -101,6 +123,16 @@ fn mirror(mirror: &Mirroring, addr: u16) -> u16 {
     }
 }
 
+/// Convert the low and the high byte to the corresponding indices from [0,3)
+fn tile_lohi_to_idx(low: u8, high: u8) -> [u8; 8] {
+    let mut color_idx = [0_u8; 8];
+    for i in 0..color_idx.len() as u8 {
+        color_idx[i as usize] = ((low >> (7 - i)) & 1) + (((high >> (7 - i)) & 1) << 1);
+    }
+
+    color_idx
+}
+
 impl PPU {
     pub fn new(game: Cartridge) -> Self {
         PPU {
@@ -131,7 +163,7 @@ impl PPU {
         }
     }
 
-    fn vram_read(&mut self, addr: u16) -> u8 {
+    fn vram_read(&self, addr: u16) -> u8 {
         let addr = mirror(self.game.header().get_mirroring(), addr - 0x2000);
         self.vram.read(addr)
     }
@@ -205,6 +237,9 @@ impl PPU {
         self.registers.status &= !PpuStatus::SPRITE_0_HIT;
         self.registers.status &= !PpuStatus::VBLANK_STARTED;
         self.flags.odd = !self.flags.odd;
+
+        // TODO: This should be done on a line basis in do_end_scanline
+        self.render_background();
     }
 
     pub fn clock(&mut self, ticks: i16) {
@@ -240,7 +275,7 @@ impl PPU {
         }
     }
 
-    fn get_pattable_addr(&self) -> u16 {
+    fn bg_pattern_table_addr(&self) -> u16 {
         match self.registers.ctrl & PpuCtrl::BG_TABLE_ADDR {
             0 => 0x0000,
             1 => 0x1000,
@@ -248,46 +283,88 @@ impl PPU {
         }
     }
 
+    fn sprite_pattern_table_addr(&self) -> u16 {
+        match self.registers.ctrl & PpuCtrl::SPRITE_TABLE_ADDR {
+            0 => 0x0000,
+            1 => 0x1000,
+            _ => unreachable!("Pattern table address should be 1 bit!"),
+        }
+    }
+
+    fn bg_pallette(&self, col: u16, row: u16) -> [u8; 4] {
+        const ATTR_TABLE_START: u16 = 0x3c0;
+        let attr_table_idx = row / 4 * 8 + col / 4;
+
+        // The attribute table is a 64-byte array at the end of each nametable that controls which
+        // palette is assigned to each part of the background.
+        //
+        // Each attribute table, starting at $23C0, $27C0, $2BC0, or $2FC0, is arranged as an 8x8
+        // byte array: https://wiki.nesdev.org/w/index.php?title=PPU_attribute_tables
+        //
+        // ,---+---+---+---.
+        // |   |   |   |   |
+        // + D1-D0 + D3-D2 +
+        // |   |   |   |   |
+        // +---+---+---+---+
+        // |   |   |   |   |
+        // + D5-D4 + D7-D6 +
+        // |   |   |   |   |
+        // `---+---+---+---'
+        let attr_byte = self.vram_read(ATTR_TABLE_START + attr_table_idx);
+
+        let pallette_idx = match ((col % 4) / 2, (row % 4) / 2) {
+            (0, 0) => attr_byte & 0b11,
+            (1, 0) => (attr_byte >> 2) & 0b11,
+            (0, 1) => (attr_byte >> 4) & 0b11,
+            (1, 1) => (attr_byte >> 6) & 0b11,
+            _ => unreachable!(),
+        };
+
+        let pallette = PALLETTE_TABLE[1 + (pallette_idx as usize) * 4];
+        [
+            ((pallette) & 0b11) as u8,
+            ((pallette >> 2) & 0b11) as u8,
+            ((pallette >> 4) & 0b11) as u8,
+            ((pallette >> 6) & 0b11) as u8,
+        ]
+    }
+
     pub fn generate_nmi(&self) -> bool {
         self.flags.has_nmi
     }
 
-    fn show_pattern_table(&mut self) {
-        const TILE_WIDTH_PX: u16 = 8;
-        const TILE_HEIGHT_PX: u16 = 8;
-        const PX_SIZE_BYTES: usize = 4; // 4th byte for the pixel is unused
-        const HEIGHT_PX: u16 = 256;
-        const WIDTH_TILES: u16 = 16;
-        const WIDTH_PX: u16 = WIDTH_TILES * TILE_WIDTH_PX;
-        const BUF_SIZE_BYTES: usize = PX_SIZE_BYTES * (HEIGHT_PX as usize) * (WIDTH_PX as usize);
+    fn read_tile_lohi(&self, addr: u16) -> (u8, u8) {
+        const HIGH_OFFSET_BYTES: u16 = 8;
+        (
+            self.game.chr_read(addr),
+            self.game.chr_read(addr + HIGH_OFFSET_BYTES),
+        )
+    }
 
-        let mut buf = vec![0_u8; BUF_SIZE_BYTES];
+    fn show_pattern_table(&mut self) {
+        let mut buf = vec![0_u8; FRAME_SIZE_BYTES];
 
         // The pattern table has a tile adjacent in memory, while SDL renders entire rows. When
         // reading the pattern table we need to add an offset that is the tile number
         //
         // Concretely, the first row of the SDL texture contains the first row of 16 tiles, which
         // are actually offset 16 bytes from each other. Display the tiles side-by-side so we have
+        // the traditional left and right halves
         for row in 0..HEIGHT_PX {
-            for col in 0..WIDTH_TILES {
-                let tile_num_down = row / TILE_HEIGHT_PX;
-                let row_offset = row % TILE_HEIGHT_PX;
+            let tile_num_down = row / TILE_HEIGHT_PX;
+            let row_offset = row % TILE_HEIGHT_PX;
 
-                const TILE_SIZE_BYTES: u16 = 16;
+            for col in 0..WIDTH_TILES {
                 let chr_addr = row_offset
                     + (col * TILE_SIZE_BYTES)
                     + (tile_num_down * TILE_SIZE_BYTES * WIDTH_TILES);
 
-                const HIGH_OFFSET_BYTES: u16 = 8;
-                let low_byte = self.game.chr_read(chr_addr);
-                let high_byte = self.game.chr_read(chr_addr + HIGH_OFFSET_BYTES);
+                let (low_byte, high_byte) = self.read_tile_lohi(chr_addr);
+                let color_idx = tile_lohi_to_idx(low_byte, high_byte);
 
                 for px in 0..TILE_WIDTH_PX {
-                    let color_idx =
-                        ((low_byte >> (7 - px)) & 1) + (((high_byte >> (7 - px)) & 1) << 1);
-
                     const COLORS: [u8; 4] = [0, 85, 170, 255];
-                    let color = COLORS[color_idx as usize];
+                    let color = COLORS[color_idx[px as usize] as usize];
                     let buf_addr = PX_SIZE_BYTES
                         * (px as usize + ((row * WIDTH_TILES + col) * TILE_WIDTH_PX) as usize);
 
@@ -300,7 +377,7 @@ impl PPU {
 
         // Format pattern table s.t. 0x000-0x0FFF are on the left and 0x1000-0x1FFF are on the
         // right
-        const HALF: usize = BUF_SIZE_BYTES / 2;
+        const HALF: usize = FRAME_SIZE_BYTES / 2;
         let pattern_table = buf[0..HALF]
             .chunks(WIDTH_PX as usize * PX_SIZE_BYTES)
             .zip(buf[HALF..].chunks(WIDTH_PX as usize * PX_SIZE_BYTES))
@@ -313,6 +390,44 @@ impl PPU {
         self.renderer
             .render_screen_raw(&pattern_table, TEX_WIDTH_PX, TEX_HEIGHT_PX);
     }
+
+    fn render_bg_tile(&mut self, row: u16, col: u16, frame_buf: &mut [u8]) {
+        let bank = self.bg_pattern_table_addr();
+        let nametable_base_addr = self.get_nametable_addr();
+
+        let tile_addr = nametable_base_addr + (row * FRAME_WIDTH_TILES) + col;
+
+        const COLORS: [u8; 4] = [0, 85, 170, 255];
+        for y in 0..TILE_HEIGHT_PX {
+            let (low, high) = self.read_tile_lohi(tile_addr + y);
+            let color_idx = tile_lohi_to_idx(low, high);
+            for x in 0..TILE_WIDTH_PX {
+                let color = COLORS[color_idx[x as usize] as usize];
+                let buf_addr = PX_SIZE_BYTES
+                    * (x as usize + ((row * FRAME_WIDTH_TILES + col) * TILE_WIDTH_PX) as usize);
+
+                // Assign all pixels as the same color value so we get a grayscale version
+                frame_buf[buf_addr..(buf_addr + PX_SIZE_BYTES)]
+                    .swap_with_slice(&mut [color; PX_SIZE_BYTES]);
+            }
+        }
+    }
+
+    // Render an entire frame
+    fn render_background(&mut self) {
+        let mut frame_buf = [0_u8; FRAME_SIZE_BYTES];
+
+        for row in 0..FRAME_HEIGHT_TILES {
+            for col in 0..FRAME_WIDTH_TILES {
+                self.render_bg_tile(row, col, &mut frame_buf);
+            }
+        }
+
+        self.renderer
+            .render_screen_raw(&frame_buf, WIDTH_PX as u32, HEIGHT_PX as u32);
+    }
+
+    fn write_scanline(&mut self) {}
 }
 
 #[cfg(test)]
@@ -333,5 +448,17 @@ mod test {
         assert_eq!(mirror(&Mirroring::Horizontal, 0x0438), 0x0038);
         assert_eq!(mirror(&Mirroring::Horizontal, 0x0838), 0x0838);
         assert_eq!(mirror(&Mirroring::Horizontal, 0x0C38), 0x0838);
+    }
+
+    #[test]
+    fn lohi_to_index() {
+        assert_eq!(
+            tile_lohi_to_idx(0b11001100_u8, 0b11001100_u8),
+            [3, 3, 0, 0, 3, 3, 0, 0]
+        );
+        assert_eq!(
+            tile_lohi_to_idx(0b10001000_u8, 0b11001100_u8),
+            [3, 2, 0, 0, 3, 2, 0, 0]
+        );
     }
 }
