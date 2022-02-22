@@ -63,14 +63,15 @@ const CYCLES_PER_SCANLINE: i16 = 341;
 const TILE_WIDTH_PX: u16 = 8;
 const TILE_HEIGHT_PX: u16 = 8;
 const PX_SIZE_BYTES: usize = 4; // 4th byte for the pixel is unused
-const HEIGHT_PX: u16 = 256;
 const WIDTH_TILES: u16 = 16;
-const WIDTH_PX: u16 = WIDTH_TILES * TILE_WIDTH_PX;
 const TILE_SIZE_BYTES: u16 = 16;
 
-const FRAME_SIZE_BYTES: usize = PX_SIZE_BYTES * (HEIGHT_PX as usize) * (WIDTH_PX as usize);
 const FRAME_WIDTH_TILES: u16 = 32;
+const FRAME_WIDTH_PX: u16 = WIDTH_TILES * TILE_WIDTH_PX;
 const FRAME_HEIGHT_TILES: u16 = 30;
+const FRAME_HEIGHT_PX: u16 = 256;
+const FRAME_SIZE_BYTES: usize =
+    PX_SIZE_BYTES * (FRAME_HEIGHT_PX as usize) * (FRAME_WIDTH_PX as usize);
 
 const PALLETTE_TABLE: [u32; 64] = [
     0x7C7C7C00, 0x0000FC00, 0x0000BC00, 0x4428BC00, 0x94008400, 0xA8002000, 0xA8100000, 0x88140000,
@@ -89,7 +90,7 @@ pub struct PPU {
     flags: Flags,
     vram: RAM,
     palette_table: [u8; 32],
-    renderer: graphics::Renderer,
+    renderer: Box<dyn graphics::Renderer>,
     // Sprites
     oam_primary: [Sprite; 64],
     oam_secondary: [Sprite; 8],
@@ -139,7 +140,7 @@ impl PPU {
             game,
             registers: Registers::default(),
             flags: Flags::default(),
-            renderer: graphics::Renderer::new(),
+            renderer: Box::new(graphics::SDLRenderer::new()),
             oam_primary: [Sprite::default(); 64],
             oam_secondary: [Sprite::default(); 8],
             palette_table: [0; 32],
@@ -147,6 +148,10 @@ impl PPU {
             scanline: -1,
             vram: RAM::with_size(0x3000),
         }
+    }
+
+    pub fn detach_renderer(&mut self) {
+        self.renderer = Box::new(graphics::NOPRenderer::new());
     }
 
     pub fn register_read(&self, addr: u16) -> u8 {
@@ -239,7 +244,8 @@ impl PPU {
         self.flags.odd = !self.flags.odd;
 
         // TODO: This should be done on a line basis in do_end_scanline
-        self.render_background();
+        // self.render_background();
+        // self.show_pattern_table();
     }
 
     pub fn clock(&mut self, ticks: i16) {
@@ -276,18 +282,16 @@ impl PPU {
     }
 
     fn bg_pattern_table_addr(&self) -> u16 {
-        match self.registers.ctrl & PpuCtrl::BG_TABLE_ADDR {
-            0 => 0x0000,
-            1 => 0x1000,
-            _ => unreachable!("Pattern table address should be 1 bit!"),
+        match self.registers.ctrl & PpuCtrl::BG_TABLE_ADDR == 0 {
+            true => 0x0000,
+            false => 0x1000,
         }
     }
 
     fn sprite_pattern_table_addr(&self) -> u16 {
-        match self.registers.ctrl & PpuCtrl::SPRITE_TABLE_ADDR {
-            0 => 0x0000,
-            1 => 0x1000,
-            _ => unreachable!("Pattern table address should be 1 bit!"),
+        match self.registers.ctrl & PpuCtrl::SPRITE_TABLE_ADDR == 0 {
+            true => 0x0000,
+            false => 0x1000,
         }
     }
 
@@ -295,7 +299,7 @@ impl PPU {
         const ATTR_TABLE_START: u16 = 0x3c0;
         let attr_table_idx = row / 4 * 8 + col / 4;
 
-        // The attribute table is a 64-byte array at the end of each nametable that controls which
+        // 120 attribute table is a 64-byte array at the end of each nametable that controls which
         // palette is assigned to each part of the background.
         //
         // Each attribute table, starting at $23C0, $27C0, $2BC0, or $2FC0, is arranged as an 8x8
@@ -350,7 +354,7 @@ impl PPU {
         // Concretely, the first row of the SDL texture contains the first row of 16 tiles, which
         // are actually offset 16 bytes from each other. Display the tiles side-by-side so we have
         // the traditional left and right halves
-        for row in 0..HEIGHT_PX {
+        for row in 0..FRAME_HEIGHT_PX {
             let tile_num_down = row / TILE_HEIGHT_PX;
             let row_offset = row % TILE_HEIGHT_PX;
 
@@ -379,16 +383,16 @@ impl PPU {
         // right
         const HALF: usize = FRAME_SIZE_BYTES / 2;
         let pattern_table = buf[0..HALF]
-            .chunks(WIDTH_PX as usize * PX_SIZE_BYTES)
-            .zip(buf[HALF..].chunks(WIDTH_PX as usize * PX_SIZE_BYTES))
+            .chunks(FRAME_WIDTH_PX as usize * PX_SIZE_BYTES)
+            .zip(buf[HALF..].chunks(FRAME_WIDTH_PX as usize * PX_SIZE_BYTES))
             .flat_map(|(l, r)| [l, r].concat())
             .collect::<Vec<_>>();
         assert_eq!(pattern_table.len(), buf.len());
 
         const TEX_WIDTH_PX: u32 = 2 * (WIDTH_TILES * TILE_WIDTH_PX) as u32;
-        const TEX_HEIGHT_PX: u32 = HEIGHT_PX as u32 / 2;
+        const TEX_HEIGHT_PX: u32 = FRAME_HEIGHT_PX as u32 / 2;
         self.renderer
-            .render_screen_raw(&pattern_table, TEX_WIDTH_PX, TEX_HEIGHT_PX);
+            .render_frame(&pattern_table, TEX_WIDTH_PX, TEX_HEIGHT_PX);
     }
 
     fn render_bg_tile(&mut self, row: u16, col: u16, frame_buf: &mut [u8]) {
@@ -396,15 +400,17 @@ impl PPU {
         let nametable_base_addr = self.get_nametable_addr();
 
         let tile_addr = nametable_base_addr + (row * FRAME_WIDTH_TILES) + col;
+        let pattable_addr = self.vram_read(tile_addr) as u16;
+        let tile_addr_buf = TILE_WIDTH_PX as usize * (row * 256 + col) as usize;
 
         const COLORS: [u8; 4] = [0, 85, 170, 255];
         for y in 0..TILE_HEIGHT_PX {
-            let (low, high) = self.read_tile_lohi(tile_addr + y);
+            let (low, high) = self.read_tile_lohi(pattable_addr + y);
             let color_idx = tile_lohi_to_idx(low, high);
             for x in 0..TILE_WIDTH_PX {
                 let color = COLORS[color_idx[x as usize] as usize];
-                let buf_addr = PX_SIZE_BYTES
-                    * (x as usize + ((row * FRAME_WIDTH_TILES + col) * TILE_WIDTH_PX) as usize);
+                let buf_addr =
+                    (tile_addr_buf + (y * FRAME_WIDTH_PX) as usize + x as usize) * PX_SIZE_BYTES;
 
                 // Assign all pixels as the same color value so we get a grayscale version
                 frame_buf[buf_addr..(buf_addr + PX_SIZE_BYTES)]
@@ -415,7 +421,7 @@ impl PPU {
 
     // Render an entire frame
     fn render_background(&mut self) {
-        let mut frame_buf = [0_u8; FRAME_SIZE_BYTES];
+        let mut frame_buf = [0_u8; 2 * FRAME_SIZE_BYTES];
 
         for row in 0..FRAME_HEIGHT_TILES {
             for col in 0..FRAME_WIDTH_TILES {
@@ -424,7 +430,7 @@ impl PPU {
         }
 
         self.renderer
-            .render_screen_raw(&frame_buf, WIDTH_PX as u32, HEIGHT_PX as u32);
+            .render_frame(&frame_buf, FRAME_WIDTH_PX as u32, FRAME_HEIGHT_PX as u32);
     }
 
     fn write_scanline(&mut self) {}
