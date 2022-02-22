@@ -44,6 +44,8 @@ impl Bus for TestBus {
     fn get_nmi(&mut self) -> Option<u8> {
         None
     }
+
+    fn detach_renderer(&mut self) {}
 }
 
 fn initialize_program(data: &[u8]) -> CPU<TestBus> {

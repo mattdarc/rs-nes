@@ -23,6 +23,7 @@ pub trait Bus {
     fn cycles(&self) -> usize;
     fn clock(&mut self, cycles: u8);
     fn get_nmi(&mut self) -> Option<u8>;
+    fn detach_renderer(&mut self);
 }
 
 pub struct NesBus {
@@ -53,6 +54,16 @@ impl NesBus {
             cpu_test_enabled: false,
         }
     }
+
+    fn dump_instr(&self, ty: &str, addr: u16, value: u8) {
+        debug_print!(
+            "--- CYC:{} {} value 0x{:X} @ addr 0x{:X}",
+            self.cycles(),
+            ty,
+            value,
+            addr
+        );
+    }
 }
 
 impl Bus for NesBus {
@@ -69,30 +80,21 @@ impl Bus for NesBus {
             //     }
             // }
             0x4020..=0xFFFF => self.game.prg_read(addr),
-            _ => (addr >> 8) as u8,
+            _ => unreachable!("Address out of range: 0x{:X}", addr),
         };
-        debug_print!(
-            "--- CYC:{} Read value {:X} from addr {:X}",
-            self.cycles(),
-            value,
-            addr
-        );
+        self.dump_instr("read", addr, value);
         value
     }
 
     fn write(&mut self, addr: u16, val: u8) {
-        debug_print!(
-            "--- CYC:{} Writing value {:X} to addr {:X}",
-            self.cycles(),
-            val,
-            addr
-        );
+        self.dump_instr("write", addr, val);
 
         match addr {
             0x0..=0x1FFF => self.cpu_ram.write(addr % 0x800, val),
+            0x4000..=0x4015 => {} // self.apu.write_register(addr - 0x4000, val),
             0x4020..=0xFFFF => self.game.prg_write(addr, val),
             0x2000..=0x3FFF => self.ppu.register_write(addr, val),
-            _ => {}
+            _ => unreachable!("Tried to write to read-only address 0x{:X}", addr),
         }
     }
 
@@ -102,7 +104,7 @@ impl Bus for NesBus {
 
     fn clock(&mut self, cycles: u8) {
         self.cycles += cycles as usize;
-        self.ppu.clock(cycles as i16);
+        self.ppu.clock(3 * cycles as i16);
         if self.ppu.generate_nmi() {
             self.nmi = Some(1);
         }
@@ -112,5 +114,9 @@ impl Bus for NesBus {
         let nmi = self.nmi;
         self.nmi = None;
         nmi
+    }
+
+    fn detach_renderer(&mut self) {
+        self.ppu.detach_renderer()
     }
 }

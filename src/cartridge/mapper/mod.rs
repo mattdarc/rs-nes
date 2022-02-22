@@ -15,6 +15,19 @@ use std::fmt;
 
 pub const RESET_VECTOR_START: u16 = 0xC004;
 
+fn dump_game(header: &Header, game: &[u8]) {
+    let (prg, chr) = game.split_at(header.get_prg_rom_size() as usize);
+    println!("PRG:");
+    for (addr, instr) in prg.iter().enumerate() {
+        println!(" 0x{:?}: {:?}", addr, instr);
+    }
+
+    println!("\nCHR:");
+    for (addr, data) in chr.iter().enumerate() {
+        println!(" 0x{:?}: {:?}", addr, data);
+    }
+}
+
 pub trait Mapper {
     fn get_num(&self) -> u8;
     fn rom_start(&self) -> u16 {
@@ -57,26 +70,12 @@ impl Default for Box<dyn Mapper> {
 }
 
 pub fn create_mapper(header: &Header, data: &[u8]) -> Box<dyn Mapper> {
-    let mapper: Box<dyn Mapper> = match header.get_mapper_num() {
+    match header.get_mapper_num() {
         0 => Box::new(Mapper0::new(header, data)),
         1 => Box::new(Mapper1::new(header, data)),
         3 => Box::new(Mapper3::new(header, data)),
         n => unreachable!("Unimplemented mapper {}!", n),
-    };
-    println!(
-        "--- CHR {:?}",
-        [
-            mapper.chr_read(0),
-            mapper.chr_read(1),
-            mapper.chr_read(2),
-            mapper.chr_read(3),
-            mapper.chr_read(4),
-            mapper.chr_read(5),
-            mapper.chr_read(6),
-            mapper.chr_read(7),
-        ]
-    );
-    mapper
+    }
 }
 
 #[cfg(test)]

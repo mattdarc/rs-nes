@@ -1,9 +1,8 @@
 use super::SDL2Intrf;
 
-use sdl2::pixels::{Color, PixelFormatEnum};
+use sdl2::pixels::PixelFormatEnum;
 use sdl2::rect::Rect;
 use sdl2::render::{TextureAccess, WindowCanvas};
-use sdl2::surface::Surface;
 use sdl2::video::DisplayMode;
 use std::mem::size_of;
 use std::slice::from_raw_parts;
@@ -32,6 +31,11 @@ const WINDOW_HEIGHT: u32 = NES_SCREEN_HEIGHT * WINDOW_HEIGHT_MUL;
 
 pub const NES_SCREEN_WIDTH: u32 = 256;
 pub const NES_SCREEN_HEIGHT: u32 = 240;
+
+pub trait Renderer {
+    fn render_line(&mut self, line: &[u8], row: u32);
+    fn render_frame(&mut self, buf: &[u8], width: u32, height: u32);
+}
 
 // for some reason textures are repeating every 120 bytes
 fn dump_texture_buf(buf: &[u8], px_size: usize) {
@@ -68,12 +72,32 @@ fn to_sdl2_slice(slice: &[u32]) -> &[u8] {
     }
 }
 
-pub struct Renderer {
-    canvas: WindowCanvas,
+pub struct NOPRenderer;
+impl NOPRenderer {
+    pub fn new() -> Self {
+        NOPRenderer {}
+    }
 }
 
-impl Renderer {
+impl Renderer for NOPRenderer {
+    fn render_line(&mut self, _line: &[u8], _row: u32) {}
+    fn render_frame(&mut self, _buf: &[u8], _width: u32, _height: u32) {}
+}
+
+pub struct SDLRenderer {
+    canvas: Option<WindowCanvas>,
+}
+
+impl SDLRenderer {
     pub fn new() -> Self {
+        SDLRenderer { canvas: None }
+    }
+
+    fn get_or_create_canvas(&mut self) -> &mut WindowCanvas {
+        self.canvas.get_or_insert_with(SDLRenderer::init_canvas)
+    }
+
+    fn init_canvas() -> WindowCanvas {
         let sdl_ctx = SDL2Intrf::context();
         let video_subsystem = sdl_ctx.video().unwrap();
 
@@ -94,19 +118,23 @@ impl Renderer {
         let mut canvas = window.into_canvas().build().unwrap();
         canvas.clear();
 
-        Renderer { canvas }
+        canvas
     }
+}
 
+impl Renderer for SDLRenderer {
     // TODO: May need to find a way to batch these together, or clear() only
     // when the screen needs to be updated
-    pub fn render_line(&mut self, row: i32, scanline: &[u8]) {
+    fn render_line(&mut self, scanline: &[u8], row: u32) {
+        // TODO: Better way to handle noop rendering
+
         assert_eq!(
             scanline.len() as u32,
             NES_SCREEN_WIDTH,
             "scanline is not the width of the screen!"
         );
 
-        let canvas = &mut self.canvas;
+        let canvas = self.get_or_create_canvas();
         let line: Vec<_> = scanline
             .iter()
             .map(|c| PALETTE_TABLE[*c as usize])
@@ -127,7 +155,7 @@ impl Renderer {
             .unwrap();
         let dst_rect = Rect::new(
             0,
-            WINDOW_HEIGHT_MUL as i32 * row,
+            (WINDOW_HEIGHT_MUL * row) as i32,
             WINDOW_WIDTH,
             WINDOW_HEIGHT_MUL,
         );
@@ -137,24 +165,25 @@ impl Renderer {
 
     /// Display a buffer buf on the screen. The format of the buffer is assumed to be in the RGB888
     /// format
-    pub fn render_screen_raw(&mut self, buf: &[u8], width: u32, height: u32) {
-        // dump_texture_buf(&buf, PX_SIZE_BYTES);
+    fn render_frame(&mut self, buf: &[u8], width: u32, height: u32) {
+        //dump_texture_buf(&buf, PX_SIZE_BYTES);
 
-        let creator = self.canvas.texture_creator();
+        let canvas = self.get_or_create_canvas();
+        let creator = canvas.texture_creator();
         let mut texture = creator
             .create_texture(None, TextureAccess::Streaming, width, height)
             .unwrap();
 
         let pitch_bytes: usize = PX_SIZE_BYTES as usize * width as usize;
         texture.update(None, &buf, pitch_bytes).unwrap();
-        self.canvas.copy(&texture, None, None).unwrap();
-        self.canvas.present();
+        canvas.copy(&texture, None, None).unwrap();
+        canvas.present();
     }
 }
 
-impl Clone for Renderer {
+impl Clone for SDLRenderer {
     fn clone(&self) -> Self {
-        Renderer::new()
+        SDLRenderer::new()
     }
 }
 

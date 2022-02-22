@@ -1,3 +1,5 @@
+#![allow(dead_code)]
+
 extern crate sdl2;
 
 #[macro_use]
@@ -19,7 +21,7 @@ use cartridge::*;
 use cpu::*;
 
 pub mod graphics {
-    pub use super::sdl_interface::graphics::Renderer;
+    pub use super::sdl_interface::graphics::{NOPRenderer, Renderer, SDLRenderer};
     pub use super::sdl_interface::SDL2Intrf;
     pub const FRAME_RATE_NS: u32 =
         1_000_000_000 / 60 / super::sdl_interface::graphics::NES_SCREEN_HEIGHT;
@@ -38,16 +40,20 @@ impl VNES {
     pub fn new(rom: &str) -> std::io::Result<Self> {
         let game = Cartridge::load(rom)?;
         let bus = NesBus::with_cartridge(game);
+
         Ok(VNES { cpu: CPU::new(bus) })
     }
 
-    pub fn enable_logging(&mut self, log: bool) {
-        self.cpu.enable_logging(log);
+    pub fn nestest_init(&mut self) {
+        self.cpu.nestest_init();
+    }
+
+    pub fn init(&mut self) {
+        self.cpu.init();
     }
 
     // TODO: Error handling. library types should not panic
     pub fn play(&mut self) -> Result<(), NesError> {
-        self.cpu.bypass_reset(0xC000);
         loop {
             if self.cpu.clock() {
                 break;

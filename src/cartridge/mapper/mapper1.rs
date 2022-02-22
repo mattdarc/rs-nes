@@ -9,9 +9,9 @@ pub struct Mapper1 {
 }
 
 impl Mapper1 {
-    pub const ROM_START: u16 = 0x8000;
-
     pub fn new(header: &Header, data: &[u8]) -> Self {
+        //dump_game(header, data);
+
         let (prg, chr) = data.split_at(header.get_prg_rom_size() as usize);
         Mapper1 {
             prg_ram: RAM::with_size(header.get_prg_ram_size()),

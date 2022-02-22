@@ -12,8 +12,6 @@ pub struct Mapper0 {
 }
 
 impl Mapper0 {
-    pub const ROM_START: u16 = 0x8000;
-
     pub fn empty() -> Self {
         Mapper0 {
             prg_rom: ROM::with_size(0),
@@ -23,6 +21,8 @@ impl Mapper0 {
     }
 
     pub fn new(header: &Header, data: &[u8]) -> Self {
+        //dump_game(header, data);
+
         let (prg, chr) = data.split_at(header.get_prg_rom_size() as usize);
         Mapper0 {
             prg_rom: ROM::with_data_and_size(prg, header.get_prg_rom_size()),

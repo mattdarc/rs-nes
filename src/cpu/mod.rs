@@ -75,18 +75,18 @@ impl<BusType: Bus> CPU<BusType> {
     }
 
     pub fn init(&mut self) {
-        self.log_message("Initializing: ");
+        self.log_exec_with_message("Initializing: ");
         self.reset();
     }
 
-    pub fn bypass_reset(&mut self, pc: u16) {
-        self.pc = pc;
+    pub fn nestest_reset_bypass(&mut self) {
+        const NESTEST_RESET_VECTOR: u16 = 0xC000;
+        self.pc = NESTEST_RESET_VECTOR;
         self.status = Status::default();
     }
 
     pub fn reset(&mut self) {
-        let pc = self.bus.read16(RESET_VECTOR_START);
-        self.pc = pc;
+        self.pc = self.bus.read16(RESET_VECTOR_START);
     }
 
     pub fn clock(&mut self) -> bool {
@@ -99,15 +99,22 @@ impl<BusType: Bus> CPU<BusType> {
         self.exit
     }
 
-    pub fn enable_logging(&mut self, log: bool) {
+    pub fn nestest_init(&mut self) {
+        self.enable_logging(true);
+        self.log_exec_with_message("NESTEST reset");
+        self.nestest_reset_bypass();
+        self.bus.detach_renderer();
+    }
+
+    fn enable_logging(&mut self, log: bool) {
         self.logging_enabled = log;
     }
 
-    pub fn log(&mut self) {
-        self.log_message("");
+    pub fn log_execution(&mut self) {
+        self.log_exec_with_message("");
     }
 
-    pub fn log_message(&mut self, message: &str) {
+    pub fn log_exec_with_message(&mut self, message: &str) {
         if !self.logging_enabled {
             return;
         }
@@ -149,6 +156,8 @@ impl<BusType: Bus> CPU<BusType> {
     }
 
     fn handle_nmi(&mut self, _status: u8) {
+        debug_print!("Handling NMI");
+
         self.push16(self.pc);
         self.push8(self.status.bits());
         self.status.set(Status::INT_DISABLE, true);
@@ -167,14 +176,19 @@ impl<BusType: Bus> CPU<BusType> {
         // 1 cycle we use to execute the instruction
         self.cycles = self.instruction.cycles();
 
-        debug_print!("\n==== Executing instruction {:?} ====", &self.instruction);
+        debug_print!(
+            "\n==== Executing instruction {:?} @ 0x{:X} ====",
+            &self.instruction,
+            self.pc
+        );
 
         for i in 0..self.instruction.size() - 1 {
             self.operands[i as usize] = self.bus.read(self.pc + i + 1);
         }
 
-        self.log();
+        self.log_execution();
         self.pc += self.instruction.size();
+
         match self.instruction.name() {
             // BRANCHES
             BPL => self.bpl(),
@@ -262,7 +276,7 @@ impl<BusType: Bus> CPU<BusType> {
     }
 
     fn hlt(&self) -> ! {
-        loop {}
+        panic!("HLT");
     }
 
     fn takes_extra_cycle(&mut self, start_addr: u16, end_addr: u16) -> bool {
