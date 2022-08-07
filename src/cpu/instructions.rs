@@ -12,7 +12,7 @@
 //   by adding the second byte of the instruction to the contents of the X register
 #![allow(non_camel_case_types)]
 
-pub fn get_instruction(opcode: u8) -> Instruction {
+pub fn decode_instruction(opcode: u8) -> Instruction {
     OPCODES[opcode as usize]
 }
 

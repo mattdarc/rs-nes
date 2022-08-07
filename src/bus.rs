@@ -2,6 +2,7 @@ use crate::apu::*;
 use crate::cartridge::*;
 use crate::controller::*;
 use crate::debug::debug_print;
+use crate::graphics::Renderer;
 use crate::memory::*;
 use crate::ppu::*;
 
@@ -23,7 +24,6 @@ pub trait Bus {
     fn cycles(&self) -> usize;
     fn clock(&mut self, cycles: u8);
     fn get_nmi(&mut self) -> Option<u8>;
-    fn detach_renderer(&mut self);
 }
 
 pub struct NesBus {
@@ -40,12 +40,12 @@ pub struct NesBus {
 }
 
 impl NesBus {
-    pub fn with_cartridge(game: Cartridge) -> Self {
+    pub fn new(game: Cartridge, renderer: Box<dyn Renderer>) -> Self {
         NesBus {
             game: game.clone(),
             _controller1: Controller::new(),
             _controller2: Controller::new(),
-            ppu: PPU::new(game),
+            ppu: PPU::new(game, renderer),
             _apu: APU::new(),
             cpu_ram: RAM::with_size(2048),
             nmi: None,
@@ -80,7 +80,7 @@ impl Bus for NesBus {
             //     }
             // }
             0x4020..=0xFFFF => self.game.prg_read(addr),
-            _ => unreachable!("Address out of range: 0x{:X}", addr),
+            _ => panic!("Address out of range: 0x{:X}", addr),
         };
         self.dump_instr("read", addr, value);
         value
@@ -94,7 +94,7 @@ impl Bus for NesBus {
             0x4000..=0x4015 => {} // self.apu.write_register(addr - 0x4000, val),
             0x4020..=0xFFFF => self.game.prg_write(addr, val),
             0x2000..=0x3FFF => self.ppu.register_write(addr, val),
-            _ => unreachable!("Tried to write to read-only address 0x{:X}", addr),
+            _ => panic!("Tried to write to read-only address 0x{:X}", addr),
         }
     }
 
@@ -114,9 +114,5 @@ impl Bus for NesBus {
         let nmi = self.nmi;
         self.nmi = None;
         nmi
-    }
-
-    fn detach_renderer(&mut self) {
-        self.ppu.detach_renderer()
     }
 }

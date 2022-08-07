@@ -51,8 +51,8 @@ mod sprite;
 
 use crate::cartridge::header::Mirroring;
 use crate::cartridge::{Cartridge, CartridgeInterface};
+use crate::graphics::Renderer;
 use crate::memory::RAM;
-use crate::sdl_interface::graphics;
 use flags::*;
 use registers::*;
 use sprite::Sprite;
@@ -90,7 +90,7 @@ pub struct PPU {
     flags: Flags,
     vram: RAM,
     palette_table: [u8; 32],
-    renderer: Box<dyn graphics::Renderer>,
+    renderer: Box<dyn Renderer>,
     // Sprites
     oam_primary: [Sprite; 64],
     oam_secondary: [Sprite; 8],
@@ -116,15 +116,15 @@ pub struct PPU {
 ///   [ a ] [ b ]
 fn mirror(mirror: &Mirroring, addr: u16) -> u16 {
     match mirror {
-        // AABB
+        // AaBb
         Mirroring::Horizontal => addr & 0xBFF,
 
-        // ABAB
+        // ABab
         Mirroring::Vertical => addr & 0x7FF,
     }
 }
 
-/// Convert the low and the high byte to the corresponding indices from [0,3)
+/// Convert the low and the high byte to the corresponding indices from [0,3]
 fn tile_lohi_to_idx(low: u8, high: u8) -> [u8; 8] {
     let mut color_idx = [0_u8; 8];
     for i in 0..color_idx.len() as u8 {
@@ -135,12 +135,12 @@ fn tile_lohi_to_idx(low: u8, high: u8) -> [u8; 8] {
 }
 
 impl PPU {
-    pub fn new(game: Cartridge) -> Self {
+    pub fn new(game: Cartridge, renderer: Box<dyn Renderer>) -> Self {
         PPU {
             game,
             registers: Registers::default(),
             flags: Flags::default(),
-            renderer: Box::new(graphics::SDLRenderer::new()),
+            renderer,
             oam_primary: [Sprite::default(); 64],
             oam_secondary: [Sprite::default(); 8],
             palette_table: [0; 32],
@@ -150,8 +150,8 @@ impl PPU {
         }
     }
 
-    pub fn detach_renderer(&mut self) {
-        self.renderer = Box::new(graphics::NOPRenderer::new());
+    pub fn set_renderer(&mut self, renderer: Box<dyn Renderer>) {
+        self.renderer = renderer;
     }
 
     pub fn register_read(&self, addr: u16) -> u8 {

@@ -44,8 +44,6 @@ impl Bus for TestBus {
     fn get_nmi(&mut self) -> Option<u8> {
         None
     }
-
-    fn detach_renderer(&mut self) {}
 }
 
 fn initialize_program(data: &[u8]) -> CPU<TestBus> {
@@ -57,7 +55,7 @@ fn initialize_program(data: &[u8]) -> CPU<TestBus> {
     program[RESET_VECTOR_START as usize + 1] = (TEST_PROGRAM_START >> 8) as u8;
 
     let bus = TestBus::new(&program);
-    let mut cpu = CPU::new(bus);
+    let mut cpu = CPU::new(bus, RESET_VECTOR_START);
     cpu.init();
     cpu
 }
@@ -68,7 +66,7 @@ macro_rules! verify_op {
      $opcode:literal,
      [ROM: $($b:expr),*][$(*$addr:literal=$val:literal),*]{$($reg:ident : $pv:expr),*}
      => [$(*$exp_addr:literal = $exp_b:expr),*]{$($eflg:ident : $ev:expr),*}) => {
-	let act_instr = instructions::get_instruction(($opcode).into());
+	let act_instr = instructions::decode_instruction(($opcode).into());
 	assert_eq!(act_instr.name(), &$name, "Instruction mismatch for {:?}", &$name);
 	assert_eq!(act_instr.mode(), &$addr_mode, "Address mode mismatch for {:?}", &$addr_mode);
 
@@ -96,7 +94,7 @@ macro_rules! verify_branch {
      $opcode:literal,
      [ROM: $($b:expr),*][$(*$addr:literal=$val:literal),*]{$($reg:ident : $pv:expr),*}
      => [$extra_cycles:literal]{$($eflg:ident : $ev:expr),*}) => {
-	let act_instr = instructions::get_instruction(($opcode).into());
+	let act_instr = instructions::decode_instruction(($opcode).into());
 	assert_eq!(act_instr.name(), &$name, "Instruction mismatch for {:?}", &$name);
 	assert_eq!(act_instr.mode(), &$addr_mode, "Address mode mismatch for {:?}", &$addr_mode);
 

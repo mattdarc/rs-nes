@@ -1,68 +1,20 @@
-use super::SDL2Intrf;
-
+/// TODO: This should be moved out into another module that implements the graphics/ui interface.
+/// Or provided as the default ui
+///
+use super::constants::*;
+use super::Renderer;
 use sdl2::pixels::PixelFormatEnum;
 use sdl2::rect::Rect;
 use sdl2::render::{TextureAccess, WindowCanvas};
 use sdl2::video::DisplayMode;
-use std::mem::size_of;
+use std::mem::MaybeUninit;
 use std::slice::from_raw_parts;
+use std::sync::Once;
 
-const PALETTE_TABLE: [u32; 64] = [
-    0x7C7C7C, 0x0000FC, 0x0000BC, 0x4428BC, 0x940084, 0xA80020, 0xA81000, 0x881400, 0x503000,
-    0x007800, 0x006800, 0x005800, 0x004058, 0x000000, 0x000000, 0x000000, 0xBCBCBC, 0x0078F8,
-    0x0058F8, 0x6844FC, 0xD800CC, 0xE40058, 0xF83800, 0xE45C10, 0xAC7C00, 0x00B800, 0x00A800,
-    0x00A844, 0x008888, 0x000000, 0x000000, 0x000000, 0xF8F8F8, 0x3CBCFC, 0x6888FC, 0x9878F8,
-    0xF878F8, 0xF85898, 0xF87858, 0xFCA044, 0xF8B800, 0xB8F818, 0x58D854, 0x58F898, 0x00E8D8,
-    0x787878, 0x000000, 0x000000, 0xFCFCFC, 0xA4E4FC, 0xB8B8F8, 0xD8B8F8, 0xF8B8F8, 0xF8A4C0,
-    0xF0D0B0, 0xFCE0A8, 0xF8D878, 0xD8F878, 0xB8F8B8, 0xB8F8D8, 0x00FCFC, 0xF8D8F8, 0x000000,
-    0x000000,
-];
+static INIT_SDL: Once = Once::new();
+static mut SDL_CONTEXT: MaybeUninit<sdl2::Sdl> = MaybeUninit::uninit();
 
-const BLOCK_SIZE: u32 = 8; // 8x8 tile
-const PX_SIZE_BYTES: u32 = (size_of::<u32>() / size_of::<u8>()) as u32; // RGB888 rounds up to word
-
-const WINDOW_NAME: &str = "Venus NES Emulator";
-
-// TODO these should not be constant, and should be able to be resized with the emulator screen
-const WINDOW_WIDTH_MUL: u32 = 4;
-const WINDOW_HEIGHT_MUL: u32 = 3;
-const WINDOW_WIDTH: u32 = NES_SCREEN_WIDTH * WINDOW_WIDTH_MUL;
-const WINDOW_HEIGHT: u32 = NES_SCREEN_HEIGHT * WINDOW_HEIGHT_MUL;
-
-pub const NES_SCREEN_WIDTH: u32 = 256;
-pub const NES_SCREEN_HEIGHT: u32 = 240;
-
-pub trait Renderer {
-    fn render_line(&mut self, line: &[u8], row: u32);
-    fn render_frame(&mut self, buf: &[u8], width: u32, height: u32);
-}
-
-// for some reason textures are repeating every 120 bytes
-fn dump_texture_buf(buf: &[u8], px_size: usize) {
-    let width = 128;
-
-    let mut s = String::new();
-    for idx in (0..buf.len()).step_by(px_size) {
-        if idx % (width * px_size) == 0 {
-            s.push('\n');
-        }
-
-        let val = buf[idx];
-        if val != buf[idx + 1] || val != buf[idx + 2] {
-            s.push('#');
-        } else {
-            match val {
-                85 | 170 | 255 => s.push(char::from_digit((val / 85) as u32, 10).unwrap()),
-                0 => s.push('.'),
-                _ => s.push('?'),
-            }
-        }
-    }
-
-    println!("\nTiles:\n{}", &s);
-}
-
-// This is safe since I know that the underlying data is valid and contiguous
+/// This is safe since we know that the underlying data is valid and contiguous
 fn to_sdl2_slice(slice: &[u32]) -> &[u8] {
     unsafe {
         from_raw_parts(
@@ -72,16 +24,16 @@ fn to_sdl2_slice(slice: &[u32]) -> &[u8] {
     }
 }
 
-pub struct NOPRenderer;
-impl NOPRenderer {
-    pub fn new() -> Self {
-        NOPRenderer {}
+pub struct SDL2Intrf;
+impl SDL2Intrf {
+    pub fn context() -> &'static sdl2::Sdl {
+        unsafe {
+            INIT_SDL.call_once(|| {
+                SDL_CONTEXT.as_mut_ptr().write(sdl2::init().unwrap());
+            });
+            &(*SDL_CONTEXT.as_ptr())
+        }
     }
-}
-
-impl Renderer for NOPRenderer {
-    fn render_line(&mut self, _line: &[u8], _row: u32) {}
-    fn render_frame(&mut self, _buf: &[u8], _width: u32, _height: u32) {}
 }
 
 pub struct SDLRenderer {
@@ -186,9 +138,3 @@ impl Clone for SDLRenderer {
         SDLRenderer::new()
     }
 }
-
-// impl Drop for Renderer {
-//     fn drop(&mut self) {
-//         println!("Screen {:#X?}", &self.screen);
-//     }
-// }

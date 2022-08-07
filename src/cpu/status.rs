@@ -1,4 +1,5 @@
 #![allow(non_snake_case)]
+
 bitflags! {
     pub struct Status: u8 {
         const NEGATIVE    = 0x80;

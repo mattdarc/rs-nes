@@ -1,12 +1,15 @@
 mod instructions;
 mod status;
 
-use crate::bus::Bus;
-use crate::debug::debug_print;
-use instructions::Instruction;
-use status::Status;
-use std::fs::File;
-use std::io::prelude::*;
+use {
+    crate::bus::Bus,
+    crate::ExitStatus,
+    instructions::{decode_instruction, Instruction},
+    status::Status,
+    std::fs::File,
+    std::io::prelude::*,
+    tracing::{event, span, Level},
+};
 
 #[inline]
 fn is_negative(v: u8) -> bool {
@@ -20,7 +23,6 @@ fn is_bit_set(v: u8, bit: u8) -> bool {
 
 #[inline]
 fn crosses_page(src: u16, dst: u16) -> bool {
-    debug_print!("{:X} ==> {:X}", src, dst);
     (src & 0xFF00) != (dst & 0xFF00)
 }
 
@@ -28,6 +30,8 @@ const STACK_BEGIN: u16 = 0x0100;
 const IRQ_HANDLER_ADDR: u16 = 0xFFFA;
 pub const NTSC_CLOCK: u32 = 1_789_773;
 pub const PAL_CLOCK: u32 = 1_662_607;
+
+// Exported for use in tests
 pub const RESET_VECTOR_START: u16 = 0xFFFC;
 
 enum TargetAddress {
@@ -49,13 +53,15 @@ pub struct CPU<BusType: Bus> {
     operands: [u8; 2],
     instruction: Instruction,
     cycles: u8,
-    exit: bool,
+    reset_vector: u16,
+
+    exit_status: ExitStatus,
     log_file: Option<File>,
     logging_enabled: bool,
 }
 
 impl<BusType: Bus> CPU<BusType> {
-    pub fn new(bus: BusType) -> Self {
+    pub fn new(bus: BusType, reset_vector: u16) -> Self {
         CPU {
             acc: 0,
             x: 0,
@@ -65,9 +71,10 @@ impl<BusType: Bus> CPU<BusType> {
             status: Status::empty(),
             bus,
             instruction: Instruction::nop(),
-            exit: false,
+            exit_status: ExitStatus::Continue,
             operands: [0; 2],
             cycles: 0,
+            reset_vector,
 
             log_file: None,
             logging_enabled: false,
@@ -75,46 +82,27 @@ impl<BusType: Bus> CPU<BusType> {
     }
 
     pub fn init(&mut self) {
-        self.log_exec_with_message("Initializing: ");
+        event!(Level::INFO, "Initializing:");
         self.reset();
     }
 
-    pub fn nestest_reset_bypass(&mut self) {
-        const NESTEST_RESET_VECTOR: u16 = 0xC000;
-        self.pc = NESTEST_RESET_VECTOR;
-        self.status = Status::default();
-    }
-
     pub fn reset(&mut self) {
-        self.pc = self.bus.read16(RESET_VECTOR_START);
+        self.pc = self.bus.read16(self.reset_vector);
     }
 
-    pub fn clock(&mut self) -> bool {
+    pub fn clock(&mut self) -> ExitStatus {
+        let _enter = span!(Level::TRACE, "Clock", cycles = self.bus.cycles());
         self.execute_instruction();
         if let Some(status) = self.bus.get_nmi() {
+            event!(Level::INFO, nmi.status = status);
             self.handle_nmi(status);
         }
 
         self.bus.clock(self.cycles);
-        self.exit
+        self.exit_status.clone()
     }
 
-    pub fn nestest_init(&mut self) {
-        self.enable_logging(true);
-        self.log_exec_with_message("NESTEST reset");
-        self.nestest_reset_bypass();
-        self.bus.detach_renderer();
-    }
-
-    fn enable_logging(&mut self, log: bool) {
-        self.logging_enabled = log;
-    }
-
-    pub fn log_execution(&mut self) {
-        self.log_exec_with_message("");
-    }
-
-    pub fn log_exec_with_message(&mut self, message: &str) {
+    pub fn log_cpu_state(&mut self) {
         if !self.logging_enabled {
             return;
         }
@@ -124,7 +112,7 @@ impl<BusType: Bus> CPU<BusType> {
         });
 
         let opcode = self.instruction.opcode();
-        let instruction = instructions::get_instruction(opcode);
+        let instruction = decode_instruction(opcode);
         let mut operand_str = String::new();
         for i in 0..instruction.size() - 1 {
             operand_str += &format!("{:0>2X} ", self.operands[i as usize]);
@@ -133,8 +121,7 @@ impl<BusType: Bus> CPU<BusType> {
         // pc instr arg0 arg1 decoded
         // C000  4C F5 C5  JMP $C5F5                       A:00 X:00 Y:00 P:24 SP:FD PPU:  0, 21 CYC:7
         let cpu_state = format!(
-            "{}{:0>4X}  {:0>2X} {:<6} {:?}                     A:{:0>2X} X:{:0>2X} Y:{:0>2X} P:{:0>2X} SP:{:0>2X}             CYC:{}\n",
-            message,
+            "{:0>4X}  {:0>2X} {:<6} {:?}                     A:{:0>2X} X:{:0>2X} Y:{:0>2X} P:{:0>2X} SP:{:0>2X}             CYC:{}\n",
             self.pc,
             opcode,
             operand_str,
@@ -149,14 +136,19 @@ impl<BusType: Bus> CPU<BusType> {
         log_file
             .write_all(cpu_state.as_bytes())
             .or_else::<std::io::Error, _>(|io_err: std::io::Error| {
-                debug_print!("Failed to write to file\n\t {:?}", io_err);
+                event!(Level::ERROR, "Failed to write to file\n\t {:?}", io_err);
                 Ok(())
             })
             .unwrap();
     }
 
     fn handle_nmi(&mut self, _status: u8) {
-        debug_print!("Handling NMI");
+        let _enter_nmi = span!(
+            Level::TRACE,
+            "Handling NMI",
+            PC = self.pc,
+            STATUS = self.status.bits()
+        );
 
         self.push16(self.pc);
         self.push8(self.status.bits());
@@ -165,18 +157,20 @@ impl<BusType: Bus> CPU<BusType> {
         // Load address of interrupt handler, set PC to execute there
         self.bus.clock(2);
         self.pc = self.bus.read16(IRQ_HANDLER_ADDR);
+        event!(Level::TRACE, "IRQ: 0x{:>4X}", self.pc);
     }
 
     fn execute_instruction(&mut self) {
         use instructions::InstrName::*;
 
         let opcode = self.bus.read(self.pc);
-        self.instruction = instructions::get_instruction(opcode);
+        self.instruction = instructions::decode_instruction(opcode);
 
         // 1 cycle we use to execute the instruction
         self.cycles = self.instruction.cycles();
 
-        debug_print!(
+        event!(
+            Level::INFO,
             "\n==== Executing instruction {:?} @ 0x{:X} ====",
             &self.instruction,
             self.pc
@@ -186,7 +180,7 @@ impl<BusType: Bus> CPU<BusType> {
             self.operands[i as usize] = self.bus.read(self.pc + i + 1);
         }
 
-        self.log_execution();
+        self.log_cpu_state();
         self.pc += self.instruction.size();
 
         match self.instruction.name() {
@@ -307,15 +301,20 @@ impl<BusType: Bus> CPU<BusType> {
     }
 
     fn do_branch(&mut self, dst: u8) {
+        // TODO: we can likely implement this as i8
         let pc = if is_negative(dst) {
             self.pc.wrapping_sub(dst.wrapping_neg() as u16)
         } else {
             self.pc.wrapping_add(dst as u16)
         };
-        debug_print!("-- Taking branch from {:#X} to {:#X}", self.pc, pc);
+        event!(Level::INFO, "BRANCH: {:#X} -> {:#X}", self.pc, pc);
 
         // add 1 if same page, 2 if different
-        self.cycles += 1 + crosses_page(self.pc, pc) as u8;
+        let crossed_page = crosses_page(self.pc, pc);
+        if crossed_page {
+            event!(Level::INFO, "CROSSED PAGE");
+        }
+        self.cycles += 1 + crossed_page as u8;
         self.pc = pc;
     }
 
@@ -538,7 +537,7 @@ impl<BusType: Bus> CPU<BusType> {
         self.push16(self.pc.wrapping_add(2));
         self.php();
         self.status.set(Status::INT_DISABLE, true);
-        self.exit = true;
+        self.exit_status = ExitStatus::ExitInterrupt;
     }
 
     fn clc(&mut self) {
@@ -624,20 +623,37 @@ impl<BusType: Bus> CPU<BusType> {
 
     fn jmp(&mut self) {
         let addr = self.calc_addr();
-        debug_print!("--- CYC:{} Jumping to {:X}", self.bus.cycles(), addr);
+        event!(
+            Level::INFO,
+            "CYC:{} JMP 0x{:>4X} -> 0x{:>4X}",
+            self.bus.cycles(),
+            self.pc,
+            addr
+        );
         self.pc = addr;
     }
 
     fn jsr(&mut self) {
         let pc = self.pc - 1;
-        debug_print!("Saving {:X}", pc);
         self.push16(pc);
         self.pc = ((self.operands[1] as u16) << 8) | (self.operands[0] as u16);
+        event!(
+            Level::INFO,
+            "JSR: 0x{:>4} -> 0x{:>4}",
+            FROM = pc,
+            TO = self.pc
+        );
     }
 
     fn rts(&mut self) {
+        let pc = self.pc;
         self.pc = self.pop16() + 1;
-        debug_print!("Restoring {:X}", self.pc);
+        event!(
+            Level::INFO,
+            "RTS 0x{:>4} -> 0x{:>4}",
+            FROM = pc,
+            TO = self.pc
+        );
     }
 
     fn lda(&mut self) {
@@ -704,8 +720,9 @@ impl<BusType: Bus> CPU<BusType> {
         self.status =
             Status::from_bits(self.pop8() & !Status::BRK.bits() | Status::PUSH_IRQ.bits())
                 .expect("All bits are covered in Status");
-        debug_print!(
-            "CYC:{} Pulled status {:X}",
+        event!(
+            Level::INFO,
+            "CYC:{} STATUS {:X}",
             self.bus.cycles(),
             self.status.bits()
         );
@@ -757,9 +774,15 @@ impl<BusType: Bus> CPU<BusType> {
     }
 
     fn sta(&mut self) {
-        debug_print!("--- CYC:{} Acc store {:X}", self.bus.cycles(), self.acc);
         let addr = self.calc_addr();
         self.bus.write(addr, self.acc);
+        event!(
+            Level::INFO,
+            "CYC:{} STA 0x{:X} -> 0x{:>4}",
+            self.bus.cycles(),
+            ACC = self.acc,
+            MEM = addr,
+        );
     }
 
     fn stx(&mut self) {

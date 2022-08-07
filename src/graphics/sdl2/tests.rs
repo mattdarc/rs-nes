@@ -1,7 +1,8 @@
 use sdl2::event::Event;
 use sdl2::keyboard::Keycode;
 use std::time::Duration;
-use venus::graphics::{Renderer, SDL2Intrf, SDLRenderer};
+use venus::graphics::sdl2::{SDL2Intrf, SDLRenderer};
+use venus::graphics::Renderer;
 
 fn main() {
     return;
@@ -25,7 +26,7 @@ fn main() {
                 _ => {}
             }
         }
-        ::std::thread::sleep(Duration::new(0, venus::graphics::FRAME_RATE_NS));
+        ::std::thread::sleep(Duration::new(0, venus::graphics::constants::FRAME_RATE_NS));
 
         y = (y + 1) % 240;
         assert!(scanline.iter().all(|x| x == &scanline[0]));
