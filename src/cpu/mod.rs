@@ -62,6 +62,7 @@ pub struct CPU<BusType: Bus> {
 
 impl<BusType: Bus> CPU<BusType> {
     pub fn new(bus: BusType, reset_vector: u16) -> Self {
+        event!(Level::DEBUG, "new cpu: reset vector 0x{:04X}", reset_vector);
         CPU {
             acc: 0,
             x: 0,
@@ -81,20 +82,16 @@ impl<BusType: Bus> CPU<BusType> {
         }
     }
 
-    pub fn init(&mut self) {
-        event!(Level::INFO, "Initializing:");
-        self.reset();
-    }
-
     pub fn reset(&mut self) {
+        event!(Level::DEBUG, "reset to vector 0x{:04}", self.reset_vector);
         self.pc = self.bus.read16(self.reset_vector);
     }
 
     pub fn clock(&mut self) -> ExitStatus {
         let _enter = span!(Level::TRACE, "Clock", cycles = self.bus.cycles());
         self.execute_instruction();
-        if let Some(status) = self.bus.get_nmi() {
-            event!(Level::INFO, nmi.status = status);
+        if let Some(status) = self.bus.pop_nmi() {
+            event!(Level::INFO, NMI.status = status);
             self.handle_nmi(status);
         }
 
@@ -118,6 +115,7 @@ impl<BusType: Bus> CPU<BusType> {
             operand_str += &format!("{:0>2X} ", self.operands[i as usize]);
         }
 
+        // NOTE: Do not modify this. It is in the same format as the nestest log
         // pc instr arg0 arg1 decoded
         // C000  4C F5 C5  JMP $C5F5                       A:00 X:00 Y:00 P:24 SP:FD PPU:  0, 21 CYC:7
         let cpu_state = format!(
@@ -169,16 +167,23 @@ impl<BusType: Bus> CPU<BusType> {
         // 1 cycle we use to execute the instruction
         self.cycles = self.instruction.cycles();
 
+        let num_operands = (self.instruction.size() - 1) as usize;
+        for i in 0..num_operands {
+            self.operands[i] = self.bus.read(self.pc + (i as u16) + 1);
+        }
+
+        let mut operand_str = String::new();
+        for i in 0..num_operands {
+            operand_str += &format!("{:#02X} ", self.operands[i]);
+        }
+
         event!(
             Level::INFO,
-            "\n==== Executing instruction {:?} @ 0x{:X} ====",
+            "exec: {:?} {} @ 0x{:04X}",
             &self.instruction,
+            operand_str,
             self.pc
         );
-
-        for i in 0..self.instruction.size() - 1 {
-            self.operands[i as usize] = self.bus.read(self.pc + i + 1);
-        }
 
         self.log_cpu_state();
         self.pc += self.instruction.size();
@@ -307,13 +312,12 @@ impl<BusType: Bus> CPU<BusType> {
         } else {
             self.pc.wrapping_add(dst as u16)
         };
-        event!(Level::INFO, "BRANCH: {:#X} -> {:#X}", self.pc, pc);
+        event!(Level::INFO, "branch: {:#X} -> {:#X}", self.pc, pc);
 
         // add 1 if same page, 2 if different
         let crossed_page = crosses_page(self.pc, pc);
-        if crossed_page {
-            event!(Level::INFO, "CROSSED PAGE");
-        }
+        event!(Level::INFO, "crossed page: {}", crossed_page);
+
         self.cycles += 1 + crossed_page as u8;
         self.pc = pc;
     }

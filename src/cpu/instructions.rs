@@ -233,7 +233,7 @@ pub struct Instruction {
 impl std::fmt::Display for Instruction {
     fn fmt(&self, f: &mut std::fmt::Formatter) -> std::fmt::Result {
         f.write_str(&format!(
-            "{:X}: {:?} {:?}",
+            "0x{:X}: {:?} <{:?}>",
             self.opcode, self.name, self.mode
         ))
     }
@@ -292,9 +292,10 @@ impl Instruction {
     }
 }
 
-// Use opcodes as indices into 256 element array of function pointers - mem overhead would be higher, but still low
-// - Opcodes are eight-bits long and have the general form AAABBBCC, where AAA and CC define the opcode,
-//   and BBB defines the addressing mode
+// Use opcodes as indices into 256 element array of function pointers
+//  - mem overhead would be higher, but still low
+//  - Opcodes are eight-bits long and have the general form AAABBBCC, where AAA and CC define the
+//    opcode, and BBB defines the addressing mode
 const fn create_opcode_table() -> [Instruction; 256] {
     let mut tbl: [Instruction; 256] = [Instruction::nop(); 256];
     use AddressingMode::*;

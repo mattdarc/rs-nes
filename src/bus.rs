@@ -1,29 +1,25 @@
 use crate::apu::*;
 use crate::cartridge::*;
 use crate::controller::*;
-use crate::debug::debug_print;
 use crate::graphics::Renderer;
 use crate::memory::*;
 use crate::ppu::*;
+use tracing::{event, Level};
 
 pub trait Bus {
     fn read(&self, addr: u16) -> u8;
     fn write(&mut self, addr: u16, val: u8);
     fn read16(&self, addr: u16) -> u16 {
-        // bus reads do not cross pages, they wrap around page boundaries
+        // Bus reads do not cross pages, they wrap around page boundaries
         let next_addr = (addr & 0xFF00) | ((addr + 1) & 0xFF);
         (self.read(addr) as u16) | ((self.read(next_addr) as u16) << 8)
     }
     fn read_n(&mut self, addr: u16, n: u16) -> Vec<u8> {
-        let mut v = Vec::with_capacity(n as usize);
-        for idx in 0..n {
-            v.push(self.read(addr + idx));
-        }
-        v
+        (0..n).map(|idx| self.read(addr + idx)).collect::<Vec<_>>()
     }
     fn cycles(&self) -> usize;
     fn clock(&mut self, cycles: u8);
-    fn get_nmi(&mut self) -> Option<u8>;
+    fn pop_nmi(&mut self) -> Option<u8>;
 }
 
 pub struct NesBus {
@@ -56,8 +52,9 @@ impl NesBus {
     }
 
     fn dump_instr(&self, ty: &str, addr: u16, value: u8) {
-        debug_print!(
-            "--- CYC:{} {} value 0x{:X} @ addr 0x{:X}",
+        event!(
+            Level::DEBUG,
+            "CYC:{} {} value 0x{:X} @ addr 0x{:X}",
             self.cycles(),
             ty,
             value,
@@ -68,19 +65,28 @@ impl NesBus {
 
 impl Bus for NesBus {
     fn read(&self, addr: u16) -> u8 {
+        // FIXME: *Could* make each of these components conform to a common interface which has
+        // read/write register, but the NES is fixed HW so I don't see the benefit ATM
         let value = match addr {
             0x0..=0x1FFF => self.cpu_ram.read(addr % 0x800),
             0x2000..=0x3FFF => self.ppu.register_read(addr),
-            // 0x4000..=0x4015 => self.apu.read_register(addr - 0x4000),
-            // 0x4016 => self.controller1.read(),
-            // 0x4017 => self.controller2.read(),
-            // 0x4018..=0x401F => {
-            //     if self.cpu_test_enabled {
-            //         self.apu.read_test_register((addr - 0x4000) % 18);
-            //     }
-            // }
+            0x4000..=0x4015 => {
+                event!(Level::INFO, "read from APU");
+                0
+            }
+            0x4016 => {
+                event!(Level::INFO, "read from controller 1");
+                0
+            }
+            0x4017 => {
+                event!(Level::INFO, "read from controller 2");
+                0
+            }
+            0x4018..=0x401F => {
+                event!(Level::INFO, "read from APU.test");
+                0
+            }
             0x4020..=0xFFFF => self.game.prg_read(addr),
-            _ => panic!("Address out of range: 0x{:X}", addr),
         };
         self.dump_instr("read", addr, value);
         value
@@ -92,6 +98,9 @@ impl Bus for NesBus {
         match addr {
             0x0..=0x1FFF => self.cpu_ram.write(addr % 0x800, val),
             0x4000..=0x4015 => {} // self.apu.write_register(addr - 0x4000, val),
+            // NOTE: Controllers can be written to to enable strobe mode
+            0x4016 => event!(Level::INFO, "write to controller 1"),
+            0x4017 => event!(Level::INFO, "write to controller 2"),
             0x4020..=0xFFFF => self.game.prg_write(addr, val),
             0x2000..=0x3FFF => self.ppu.register_write(addr, val),
             _ => panic!("Tried to write to read-only address 0x{:X}", addr),
@@ -110,7 +119,7 @@ impl Bus for NesBus {
         }
     }
 
-    fn get_nmi(&mut self) -> Option<u8> {
+    fn pop_nmi(&mut self) -> Option<u8> {
         let nmi = self.nmi;
         self.nmi = None;
         nmi

@@ -14,7 +14,6 @@ pub mod ppu;
 mod bus;
 mod common;
 mod controller;
-mod debug;
 mod memory;
 
 use cartridge::*;
@@ -51,23 +50,16 @@ impl VNES {
         })
     }
 
-    pub fn init(&mut self) {
-        self.cpu.init();
-    }
-
-    pub fn play(&mut self) -> Result<(), NesError> {
+    pub fn play(&mut self) -> Result<(), String> {
+        self.cpu.reset();
         loop {
-            match self.cpu.clock() {
+            let status = self.cpu.clock();
+            event!(Level::DEBUG, "clock: {:?}", status);
+            match status {
                 ExitStatus::Continue => {}
                 ExitStatus::ExitSuccess => return Ok(()),
-                ExitStatus::ExitError(e) => {
-                    event!(Level::ERROR, %e, "Exiting");
-                    return Ok(());
-                }
-                ExitStatus::ExitInterrupt => {
-                    event!(Level::INFO, "Exiting from software interrupt");
-                    return Ok(());
-                }
+                ExitStatus::ExitError(e) => return Err(e),
+                ExitStatus::ExitInterrupt => return Ok(()),
             }
         }
     }

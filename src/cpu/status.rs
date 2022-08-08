@@ -5,7 +5,7 @@ bitflags! {
         const NEGATIVE    = 0x80;
         const OVERFLOW    = 0x40;
         const PUSH_IRQ    = 0x20;
-        const BRK  = 0x10;
+        const BRK         = 0x10;
         const DECIMAL     = 0x08;
         const INT_DISABLE = 0x04;
         const ZERO        = 0x02;

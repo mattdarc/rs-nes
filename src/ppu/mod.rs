@@ -56,6 +56,7 @@ use crate::memory::RAM;
 use flags::*;
 use registers::*;
 use sprite::Sprite;
+use tracing::{event, Level};
 
 const SCANLINES_PER_FRAME: i16 = 262;
 const VISIBLE_SCANLINES: i16 = 241;
@@ -228,10 +229,11 @@ impl PPU {
             && !self.has_sprite0_hit()
     }
 
-    fn do_end_scanline(&mut self) {
-        self.registers.status |= PpuStatus::VBLANK_STARTED;
+    fn do_start_vblank(&mut self) {
         self.registers.status &= !PpuStatus::SPRITE_0_HIT;
+        self.registers.status |= PpuStatus::VBLANK_STARTED;
         if self.registers.ctrl & PpuCtrl::NMI_ENABLE != 0 {
+            // NMI is generated only on the start of the VBLANK cycle
             self.flags.has_nmi = true;
         }
     }
@@ -242,6 +244,7 @@ impl PPU {
         self.registers.status &= !PpuStatus::SPRITE_0_HIT;
         self.registers.status &= !PpuStatus::VBLANK_STARTED;
         self.flags.odd = !self.flags.odd;
+        event!(Level::INFO, "end frame {}", status = self.registers.status);
 
         // TODO: This should be done on a line basis in do_end_scanline
         // self.render_background();
@@ -262,11 +265,9 @@ impl PPU {
         self.scanline += 1;
 
         if self.scanline == VISIBLE_SCANLINES {
-            // End of frame, restart new frame
-            self.do_end_scanline()
-        }
-
-        if self.scanline == SCANLINES_PER_FRAME {
+            // End of visible scanlines
+            self.do_start_vblank()
+        } else if self.scanline == SCANLINES_PER_FRAME {
             self.do_end_frame()
         }
     }
@@ -333,8 +334,11 @@ impl PPU {
         ]
     }
 
-    pub fn generate_nmi(&self) -> bool {
-        self.flags.has_nmi
+    /// Generate an NMI. One called, the flag will be reset to false
+    pub fn generate_nmi(&mut self) -> bool {
+        let nmi = self.flags.has_nmi;
+        self.flags.has_nmi = false;
+        nmi
     }
 
     fn read_tile_lohi(&self, addr: u16) -> (u8, u8) {
