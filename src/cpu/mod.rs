@@ -84,7 +84,9 @@ impl<BusType: Bus> CPU<BusType> {
 
     pub fn reset_override(&mut self, pc: u16) {
         event!(Level::DEBUG, "reset PC {} -> {}", FROM = self.pc, TO = pc);
-        self.pc = pc
+        self.pc = pc;
+        self.status = Status::default();
+        self.sp = 0xFD;
     }
 
     pub fn reset(&mut self) {
@@ -120,15 +122,23 @@ impl<BusType: Bus> CPU<BusType> {
             operand_str += &format!("{:0>2X} ", self.operands[i as usize]);
         }
 
+        let decoded_str = match instruction.size() {
+            1 => String::new(),
+            2 => format!("${:02X}", self.operands[0]),
+            3 => format!("${:02X}{:02X}", self.operands[1], self.operands[0]),
+            _ => unreachable!(),
+        };
+
         // NOTE: Do not modify this. It is in the same format as the nestest log
         // pc instr arg0 arg1 decoded
-        // C000  4C F5 C5  JMP $C5F5                       A:00 X:00 Y:00 P:24 SP:FD PPU:  0, 21 CYC:7
+        // C000  4C F5 C5  JMP $C5F5                           A:00 X:00 Y:00 P:24 SP:FD PPU:  0, 21 CYC:7
         let cpu_state = format!(
-            "{:0>4X}  {:0>2X} {:<6} {:?}                             A:{:0>2X} X:{:0>2X} Y:{:0>2X} P:{:0>2X} SP:{:0>2X}             CYC:{}\n",
+            "{:04X}  {:02X} {:6} {:?} {}                       A:{:0>2X} X:{:0>2X} Y:{:0>2X} P:{:0>2X} SP:{:0>2X}             CYC:{}\n",
             self.pc,
             opcode,
             operand_str,
             self.instruction.name(),
+            decoded_str,
             self.acc,
             self.x,
             self.y,

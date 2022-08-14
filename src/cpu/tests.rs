@@ -57,6 +57,9 @@ fn initialize_program(data: &[u8]) -> CPU<TestBus> {
     let bus = TestBus::new(&program);
     let mut cpu = CPU::new(bus, RESET_VECTOR_START);
     cpu.reset();
+
+    // Default status is not empty, but we make it such for ease in the following tests
+    cpu.status = Status::empty();
     cpu
 }
 
