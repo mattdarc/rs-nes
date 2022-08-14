@@ -179,13 +179,14 @@ impl<BusType: Bus> CPU<BusType> {
 
         event!(
             Level::INFO,
-            "exec: {:?} {} @ 0x{:04X}",
+            "0x{:04X}> {:?} {}",
+            self.pc,
             &self.instruction,
             operand_str,
-            self.pc
         );
 
         self.log_cpu_state();
+        // FIXME: incrementing the pc should go at the end
         self.pc += self.instruction.size();
 
         match self.instruction.name() {
@@ -312,12 +313,16 @@ impl<BusType: Bus> CPU<BusType> {
         } else {
             self.pc.wrapping_add(dst as u16)
         };
-        event!(Level::INFO, "branch: {:#X} -> {:#X}", self.pc, pc);
-
-        // add 1 if same page, 2 if different
         let crossed_page = crosses_page(self.pc, pc);
-        event!(Level::INFO, "crossed page: {}", crossed_page);
+        event!(
+            Level::INFO,
+            "0x{:>4X}> branch taken -> {:#X} (cross page {})",
+            self.pc,
+            pc,
+            crossed_page
+        );
 
+        // Crossing a page adds an extra cycle
         self.cycles += 1 + crossed_page as u8;
         self.pc = pc;
     }
@@ -627,13 +632,7 @@ impl<BusType: Bus> CPU<BusType> {
 
     fn jmp(&mut self) {
         let addr = self.calc_addr();
-        event!(
-            Level::INFO,
-            "CYC:{} JMP 0x{:>4X} -> 0x{:>4X}",
-            self.bus.cycles(),
-            self.pc,
-            addr
-        );
+        event!(Level::INFO, "{:#04X}> JMP -> {:#04X}", self.pc, TO = addr);
         self.pc = addr;
     }
 
@@ -641,23 +640,13 @@ impl<BusType: Bus> CPU<BusType> {
         let pc = self.pc - 1;
         self.push16(pc);
         self.pc = ((self.operands[1] as u16) << 8) | (self.operands[0] as u16);
-        event!(
-            Level::INFO,
-            "JSR: 0x{:>4} -> 0x{:>4}",
-            FROM = pc,
-            TO = self.pc
-        );
+        event!(Level::INFO, "{:#04X}> JSR -> {:#04X}", pc, TO = self.pc);
     }
 
     fn rts(&mut self) {
         let pc = self.pc;
         self.pc = self.pop16() + 1;
-        event!(
-            Level::INFO,
-            "RTS 0x{:>4} -> 0x{:>4}",
-            FROM = pc,
-            TO = self.pc
-        );
+        event!(Level::INFO, "{:#04X}> RTS -> {:#04X}", pc, TO = self.pc);
     }
 
     fn lda(&mut self) {
@@ -726,8 +715,8 @@ impl<BusType: Bus> CPU<BusType> {
                 .expect("All bits are covered in Status");
         event!(
             Level::INFO,
-            "CYC:{} STATUS {:X}",
-            self.bus.cycles(),
+            "{:#>4}> STATUS {:X}",
+            self.pc,
             self.status.bits()
         );
     }
@@ -782,8 +771,8 @@ impl<BusType: Bus> CPU<BusType> {
         self.bus.write(addr, self.acc);
         event!(
             Level::INFO,
-            "CYC:{} STA 0x{:X} -> 0x{:>4}",
-            self.bus.cycles(),
+            "0x{:>4X}: STA 0x{:X} -> 0x{:>4X}",
+            self.pc,
             ACC = self.acc,
             MEM = addr,
         );
