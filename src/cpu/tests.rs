@@ -41,7 +41,7 @@ impl Bus for TestBus {
 
     fn clock(&mut self, _cycles: u8) {}
 
-    fn get_nmi(&mut self) -> Option<u8> {
+    fn pop_nmi(&mut self) -> Option<u8> {
         None
     }
 }
@@ -56,7 +56,7 @@ fn initialize_program(data: &[u8]) -> CPU<TestBus> {
 
     let bus = TestBus::new(&program);
     let mut cpu = CPU::new(bus, RESET_VECTOR_START);
-    cpu.init();
+    cpu.reset();
     cpu
 }
 

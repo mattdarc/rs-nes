@@ -20,5 +20,6 @@ fn main() -> Result<(), String> {
         .init();
 
     let mut vnes = VNES::new("donkey-kong.nes").unwrap();
+    vnes.reset();
     vnes.play()
 }

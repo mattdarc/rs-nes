@@ -44,14 +44,20 @@ impl VNES {
     pub fn new(rom: &str) -> std::io::Result<Self> {
         let game = Cartridge::load(rom)?;
         let bus = NesBus::new(game, Box::new(graphics::sdl2::SDLRenderer::new()));
-
         Ok(VNES {
             cpu: CPU::new(bus, RESET_VECTOR_START),
         })
     }
 
-    pub fn play(&mut self) -> Result<(), String> {
+    pub fn reset_override(&mut self, pc: u16) {
+        self.cpu.reset_override(pc);
+    }
+
+    pub fn reset(&mut self) {
         self.cpu.reset();
+    }
+
+    pub fn play(&mut self) -> Result<(), String> {
         loop {
             let status = self.cpu.clock();
             event!(Level::DEBUG, "clock: {:?}", status);

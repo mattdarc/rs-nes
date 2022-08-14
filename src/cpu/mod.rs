@@ -82,9 +82,14 @@ impl<BusType: Bus> CPU<BusType> {
         }
     }
 
+    pub fn reset_override(&mut self, pc: u16) {
+        event!(Level::DEBUG, "reset to vector 0x{:04}", self.reset_vector);
+        self.pc = pc
+    }
+
     pub fn reset(&mut self) {
         event!(Level::DEBUG, "reset to vector 0x{:04}", self.reset_vector);
-        self.pc = self.bus.read16(self.reset_vector);
+        self.pc = self.bus.read16(self.reset_vector)
     }
 
     pub fn clock(&mut self) -> ExitStatus {
@@ -100,12 +105,13 @@ impl<BusType: Bus> CPU<BusType> {
     }
 
     pub fn log_cpu_state(&mut self) {
-        if !self.logging_enabled {
+        const LOG_CPU_STATE: bool = true;
+        if !LOG_CPU_STATE {
             return;
         }
 
         let log_file = self.log_file.get_or_insert_with(|| {
-            File::create("nestest-log.txt").expect("Error creating log file")
+            File::create("test/nestest.log").expect("Error creating log file")
         });
 
         let opcode = self.instruction.opcode();
@@ -119,7 +125,7 @@ impl<BusType: Bus> CPU<BusType> {
         // pc instr arg0 arg1 decoded
         // C000  4C F5 C5  JMP $C5F5                       A:00 X:00 Y:00 P:24 SP:FD PPU:  0, 21 CYC:7
         let cpu_state = format!(
-            "{:0>4X}  {:0>2X} {:<6} {:?}                     A:{:0>2X} X:{:0>2X} Y:{:0>2X} P:{:0>2X} SP:{:0>2X}             CYC:{}\n",
+            "{:0>4X}  {:0>2X} {:<6} {:?}                             A:{:0>2X} X:{:0>2X} Y:{:0>2X} P:{:0>2X} SP:{:0>2X}             CYC:{}\n",
             self.pc,
             opcode,
             operand_str,
