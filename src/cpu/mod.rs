@@ -83,13 +83,12 @@ impl<BusType: Bus> CPU<BusType> {
     }
 
     pub fn reset_override(&mut self, pc: u16) {
-        event!(Level::DEBUG, "reset to vector 0x{:04}", self.reset_vector);
+        event!(Level::DEBUG, "reset PC {} -> {}", FROM = self.pc, TO = pc);
         self.pc = pc
     }
 
     pub fn reset(&mut self) {
-        event!(Level::DEBUG, "reset to vector 0x{:04}", self.reset_vector);
-        self.pc = self.bus.read16(self.reset_vector)
+        self.reset_override(self.bus.read16(RESET_VECTOR_START));
     }
 
     pub fn clock(&mut self) -> ExitStatus {
