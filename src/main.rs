@@ -2,7 +2,7 @@ use tracing::Level;
 use tracing_subscriber::{filter::LevelFilter, fmt, prelude::*, Layer};
 use venus::VNES;
 
-const COMPONENT: &'static str = "ppu";
+const DEBUG_COMPONENT: &'static str = "ppu";
 
 fn main() -> Result<(), String> {
     let mut layers = Vec::new();
@@ -18,7 +18,7 @@ fn main() -> Result<(), String> {
             .with_file(true)
             .compact()
             .with_filter(tracing_subscriber::filter::filter_fn(|metadata| {
-                metadata.target() == format!("venus::{}", COMPONENT)
+                metadata.target() == format!("venus::{}", DEBUG_COMPONENT)
             }))
             .boxed(),
     ); // use the `Compact` formatting style.
