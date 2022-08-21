@@ -16,10 +16,13 @@ fn main() -> Result<(), String> {
     // as the default.
     tracing_subscriber::fmt()
         .event_format(format)
-        .with_max_level(Level::INFO)
+        .with_max_level(Level::DEBUG)
         .init();
 
     let mut vnes = VNES::new("donkey-kong.nes").unwrap();
     vnes.reset();
-    vnes.play()
+    let res = vnes.play();
+
+    println!("Exiting VNES");
+    res
 }

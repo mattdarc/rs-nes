@@ -58,15 +58,34 @@ impl VNES {
     }
 
     pub fn play(&mut self) -> Result<(), String> {
+        use graphics::sdl2::SDL2Intrf;
+        use sdl2::{event::Event, keyboard::Keycode};
+        use std::time::Duration;
+
+        let mut event_pump = SDL2Intrf::context().event_pump().unwrap();
+
         loop {
+            for event in event_pump.poll_iter() {
+                match event {
+                    Event::Quit { .. }
+                    | Event::KeyDown {
+                        keycode: Some(Keycode::Escape),
+                        ..
+                    } => return Ok(()),
+                    _ => {}
+                }
+            }
+
             let status = self.cpu.clock();
             event!(Level::DEBUG, "clock: {:?}", status);
+
             match status {
                 ExitStatus::Continue => {}
                 ExitStatus::ExitSuccess => return Ok(()),
                 ExitStatus::ExitError(e) => return Err(e),
                 ExitStatus::ExitInterrupt => return Ok(()),
             }
+            ::std::thread::sleep(Duration::new(0, graphics::constants::FRAME_RATE_NS));
         }
     }
 }

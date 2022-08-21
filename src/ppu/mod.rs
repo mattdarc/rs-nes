@@ -74,7 +74,7 @@ const FRAME_HEIGHT_PX: u16 = 256;
 const FRAME_SIZE_BYTES: usize =
     PX_SIZE_BYTES * (FRAME_HEIGHT_PX as usize) * (FRAME_WIDTH_PX as usize);
 
-const PALLETTE_TABLE: [u32; 64] = [
+const PALETTE_TABLE: [u32; 64] = [
     0x7C7C7C00, 0x0000FC00, 0x0000BC00, 0x4428BC00, 0x94008400, 0xA8002000, 0xA8100000, 0x88140000,
     0x50300000, 0x00780000, 0x00680000, 0x00580000, 0x00405800, 0x00000000, 0x00000000, 0x00000000,
     0xBCBCBC00, 0x0078F800, 0x0058F800, 0x6844FC00, 0xD800CC00, 0xE4005800, 0xF8380000, 0xE45C1000,
@@ -86,6 +86,7 @@ const PALLETTE_TABLE: [u32; 64] = [
 ];
 
 pub struct PPU {
+    frame_buf: [u8; FRAME_SIZE_BYTES],
     game: Cartridge,
     registers: Registers,
     flags: Flags,
@@ -104,6 +105,15 @@ pub struct PPU {
     //palette_attr_regs: [u16; 2],
     cycle: i16,
     scanline: i16,
+}
+
+fn to_u8_slice(x: u32) -> [u8; 4] {
+    [
+        ((x >> 3) & 0xFF) as u8,
+        ((x >> 2) & 0xFF) as u8,
+        ((x >> 1) & 0xFF) as u8,
+        ((x >> 0) & 0xFF) as u8,
+    ]
 }
 
 /// Mirror the provided address according to the Mirroring `mirror`
@@ -135,9 +145,11 @@ fn tile_lohi_to_idx(low: u8, high: u8) -> [u8; 8] {
     color_idx
 }
 
+const NAMETABLE_START: u16 = 0x2F00;
 impl PPU {
     pub fn new(game: Cartridge, renderer: Box<dyn Renderer>) -> Self {
         PPU {
+            frame_buf: [0_u8; FRAME_SIZE_BYTES],
             game,
             registers: Registers::default(),
             flags: Flags::default(),
@@ -155,6 +167,7 @@ impl PPU {
         self.renderer = renderer;
     }
 
+    // FIXME: These implement some special behavior after beiing accessed
     pub fn register_read(&self, addr: u16) -> u8 {
         match (addr - 0x2000) % 8 {
             0 => self.registers.ctrl,
@@ -166,28 +179,6 @@ impl PPU {
             6 => panic!("Cannot read PPU address!"),
             7 => self.registers.data,
             _ => panic!("Invalid PPU Register read: address {:X}", addr),
-        }
-    }
-
-    fn vram_read(&self, addr: u16) -> u8 {
-        let addr = mirror(self.game.header().get_mirroring(), addr - 0x2000);
-        self.vram.read(addr)
-    }
-
-    fn ppu_read(&mut self) -> u8 {
-        let addr: u16 = self.registers.addr.into();
-        let incr_amount = if self.registers.ctrl & PpuCtrl::VRAM_INCR != 0 {
-            32
-        } else {
-            1
-        };
-        self.registers.addr.incr(incr_amount);
-
-        match addr {
-            0..=0x1FFF => self.game.chr_read(addr),
-            0x2000..=0x2FFF => self.vram_read(addr),
-            0x3F00..=0x3FFF => self.palette_table[(addr - 0x3F00) as usize],
-            _ => panic!("Read from out of range address 0x{:X}!", addr),
         }
     }
 
@@ -203,6 +194,25 @@ impl PPU {
             7 => self.registers.data = val,
             _ => panic!("Invalid PPU Register write: address {:X}", addr),
         }
+    }
+
+    fn vram_read(&self, addr: u16) -> u8 {
+        self.vram
+            .read(mirror(self.game.header().get_mirroring(), addr))
+    }
+
+    fn ppu_addr_next(&mut self) {
+        let amt = if self.registers.ctrl & PpuCtrl::VRAM_INCR != 0 {
+            32
+        } else {
+            1
+        };
+        self.registers.addr.incr(amt);
+    }
+
+    fn pattern_table_read(&self, addr: u16) -> u8 {
+        assert!(0 <= addr && addr < 0x1FFF);
+        self.game.chr_read(addr)
     }
 
     fn show_clipped_lhs(&self) -> bool {
@@ -247,7 +257,7 @@ impl PPU {
         event!(Level::INFO, "end frame {}", status = self.registers.status);
 
         // TODO: This should be done on a line basis in do_end_scanline
-        // self.render_background();
+        self.render_frame();
         // self.show_pattern_table();
     }
 
@@ -261,11 +271,14 @@ impl PPU {
             self.registers.status |= PpuStatus::SPRITE_0_HIT;
         }
 
+        if 0 <= self.scanline && self.scanline < VISIBLE_SCANLINES {
+            self.write_scanline();
+        }
+
         self.cycle -= CYCLES_PER_SCANLINE;
         self.scanline += 1;
 
         if self.scanline == VISIBLE_SCANLINES {
-            // End of visible scanlines
             self.do_start_vblank()
         } else if self.scanline == SCANLINES_PER_FRAME {
             self.do_end_frame()
@@ -282,24 +295,22 @@ impl PPU {
         }
     }
 
-    fn bg_pattern_table_addr(&self) -> u16 {
-        match self.registers.ctrl & PpuCtrl::BG_TABLE_ADDR == 0 {
+    fn bg_table_base(&self) -> u16 {
+        match (self.registers.ctrl & PpuCtrl::BG_TABLE_ADDR) == 0 {
             true => 0x0000,
             false => 0x1000,
         }
     }
 
-    fn sprite_pattern_table_addr(&self) -> u16 {
+    fn sprite_table_base(&self) -> u16 {
         match self.registers.ctrl & PpuCtrl::SPRITE_TABLE_ADDR == 0 {
             true => 0x0000,
             false => 0x1000,
         }
     }
 
-    fn bg_pallette(&self, col: u16, row: u16) -> [u8; 4] {
-        const ATTR_TABLE_START: u16 = 0x3c0;
-        let attr_table_idx = row / 4 * 8 + col / 4;
-
+    fn read_attr_table(&self, v: u16) -> u8 {
+        assert!(0x2000 <= v && v < 0x2FFF, "address {:#X} out of range", v);
         // 120 attribute table is a 64-byte array at the end of each nametable that controls which
         // palette is assigned to each part of the background.
         //
@@ -315,23 +326,19 @@ impl PPU {
         // + D5-D4 + D7-D6 +
         // |   |   |   |   |
         // `---+---+---+---'
-        let attr_byte = self.vram_read(ATTR_TABLE_START + attr_table_idx);
+        let attr_addr = 0x23C0 | (v & 0x0C00) | ((v >> 4) & 0x38) | ((v >> 2) & 0x07);
+        let attr_byte = self.vram_read(attr_addr);
+        let tile = v & 0xFF;
 
-        let pallette_idx = match ((col % 4) / 2, (row % 4) / 2) {
+        let row = (tile / FRAME_HEIGHT_TILES) % 2;
+        let col = tile % 2;
+        match (row, col) {
             (0, 0) => attr_byte & 0b11,
             (1, 0) => (attr_byte >> 2) & 0b11,
             (0, 1) => (attr_byte >> 4) & 0b11,
             (1, 1) => (attr_byte >> 6) & 0b11,
             _ => unreachable!(),
-        };
-
-        let pallette = PALLETTE_TABLE[1 + (pallette_idx as usize) * 4];
-        [
-            ((pallette) & 0b11) as u8,
-            ((pallette >> 2) & 0b11) as u8,
-            ((pallette >> 4) & 0b11) as u8,
-            ((pallette >> 6) & 0b11) as u8,
-        ]
+        }
     }
 
     /// Generate an NMI. One called, the flag will be reset to false
@@ -341,16 +348,71 @@ impl PPU {
         nmi
     }
 
-    fn read_tile_lohi(&self, addr: u16) -> (u8, u8) {
-        const HIGH_OFFSET_BYTES: u16 = 8;
-        (
-            self.game.chr_read(addr),
-            self.game.chr_read(addr + HIGH_OFFSET_BYTES),
-        )
+    /// Renders a tile at a time, since that's what data we get intially. There are four reads
+    /// required to render a full tile:
+    ///  1. Name table Byte
+    ///  2. Attribute table byte
+    ///  3. Palette table tile low
+    ///  4. Palette table tile high (+8 bytes)
+    fn write_scanline(&mut self) {
+        assert!(
+            self.scanline >= 0 && self.scanline < VISIBLE_SCANLINES,
+            "Should not render during non-visible scanline {}",
+            self.scanline
+        );
+
+        let bank = self.bg_table_base();
+
+        for tile in 0..(FRAME_WIDTH_TILES as usize) {
+            let addr: u16 = self.registers.addr.into();
+            let nametable_addr: u16 = self.get_nametable_addr() + addr;
+            let pat_table_addr = self.bg_table_base() + self.vram_read(nametable_addr) as u16;
+
+            let d4 = 0_u8; // Rendering background
+            let d3_d2 = self.read_attr_table(addr);
+
+            self.ppu_addr_next();
+
+            const HIGH_OFFSET_BYTES: u16 = 8;
+            let pattern_lo = self.pattern_table_read(pat_table_addr);
+            let pattern_hi = self.pattern_table_read(pat_table_addr + HIGH_OFFSET_BYTES);
+            let color_idx = tile_lohi_to_idx(pattern_lo, pattern_hi);
+
+            // Assign all pixels as the same color value so we get a grayscale version
+            for (px, color) in color_idx.iter().enumerate() {
+                let buf_addr = PX_SIZE_BYTES
+                    * (((self.scanline as usize) * (WIDTH_TILES as usize) + tile)
+                        * TILE_WIDTH_PX as usize
+                        + px as usize);
+
+                let idx = (d4 << 4) | (d3_d2 << 2) | color;
+
+                let color = PALETTE_TABLE[idx as usize];
+                event!(Level::DEBUG, "writing addres {:#X}", buf_addr);
+                self.frame_buf[buf_addr..(buf_addr + PX_SIZE_BYTES)]
+                    .swap_with_slice(&mut to_u8_slice(color));
+            }
+        }
+    }
+
+    fn render_frame(&mut self) {
+        self.renderer.render_frame(
+            &self.frame_buf,
+            FRAME_WIDTH_PX as u32,
+            FRAME_HEIGHT_PX as u32,
+        );
     }
 
     fn show_pattern_table(&mut self) {
         let mut buf = vec![0_u8; FRAME_SIZE_BYTES];
+
+        let read_tile_lohi = |addr: u16| -> (u8, u8) {
+            const HIGH_OFFSET_BYTES: u16 = 8;
+            (
+                self.game.chr_read(addr),
+                self.game.chr_read(addr + HIGH_OFFSET_BYTES),
+            )
+        };
 
         // The pattern table has a tile adjacent in memory, while SDL renders entire rows. When
         // reading the pattern table we need to add an offset that is the tile number
@@ -367,7 +429,7 @@ impl PPU {
                     + (col * TILE_SIZE_BYTES)
                     + (tile_num_down * TILE_SIZE_BYTES * WIDTH_TILES);
 
-                let (low_byte, high_byte) = self.read_tile_lohi(chr_addr);
+                let (low_byte, high_byte) = read_tile_lohi(chr_addr);
                 let color_idx = tile_lohi_to_idx(low_byte, high_byte);
 
                 for px in 0..TILE_WIDTH_PX {
@@ -398,46 +460,6 @@ impl PPU {
         self.renderer
             .render_frame(&pattern_table, TEX_WIDTH_PX, TEX_HEIGHT_PX);
     }
-
-    fn render_bg_tile(&mut self, row: u16, col: u16, frame_buf: &mut [u8]) {
-        let bank = self.bg_pattern_table_addr();
-        let nametable_base_addr = self.get_nametable_addr();
-
-        let tile_addr = nametable_base_addr + (row * FRAME_WIDTH_TILES) + col;
-        let pattable_addr = self.vram_read(tile_addr) as u16;
-        let tile_addr_buf = TILE_WIDTH_PX as usize * (row * 256 + col) as usize;
-
-        const COLORS: [u8; 4] = [0, 85, 170, 255];
-        for y in 0..TILE_HEIGHT_PX {
-            let (low, high) = self.read_tile_lohi(pattable_addr + y);
-            let color_idx = tile_lohi_to_idx(low, high);
-            for x in 0..TILE_WIDTH_PX {
-                let color = COLORS[color_idx[x as usize] as usize];
-                let buf_addr =
-                    (tile_addr_buf + (y * FRAME_WIDTH_PX) as usize + x as usize) * PX_SIZE_BYTES;
-
-                // Assign all pixels as the same color value so we get a grayscale version
-                frame_buf[buf_addr..(buf_addr + PX_SIZE_BYTES)]
-                    .swap_with_slice(&mut [color; PX_SIZE_BYTES]);
-            }
-        }
-    }
-
-    // Render an entire frame
-    fn render_background(&mut self) {
-        let mut frame_buf = [0_u8; 2 * FRAME_SIZE_BYTES];
-
-        for row in 0..FRAME_HEIGHT_TILES {
-            for col in 0..FRAME_WIDTH_TILES {
-                self.render_bg_tile(row, col, &mut frame_buf);
-            }
-        }
-
-        self.renderer
-            .render_frame(&frame_buf, FRAME_WIDTH_PX as u32, FRAME_HEIGHT_PX as u32);
-    }
-
-    fn write_scanline(&mut self) {}
 }
 
 #[cfg(test)]
