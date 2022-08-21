@@ -204,6 +204,8 @@ impl PPU {
         );
 
         match (addr - 0x2000) % 8 {
+            // FIXME: After power/reset, writes to this register are ignored for about 30,000
+            // cycles.
             0 => self.registers.ctrl = val,
             1 => self.registers.mask = val,
             2 => self.registers.status = val,
@@ -325,7 +327,7 @@ impl PPU {
         }
     }
 
-    fn get_nametable_addr(&self) -> u16 {
+    fn nametable_base(&self) -> u16 {
         match self.registers.ctrl & PpuCtrl::NAMETABLE_ADDR {
             0 => 0x2000,
             1 => 0x2400,
@@ -350,7 +352,7 @@ impl PPU {
     }
 
     fn read_attr_table(&self, v: u16) -> u8 {
-        assert!(0x2000 <= v && v < 0x2FFF, "address {:#X} out of range", v);
+        assert!(0x2000 <= v && v < 0x3FFF, "address {:#X} out of range", v);
         // 120 attribute table is a 64-byte array at the end of each nametable that controls which
         // palette is assigned to each part of the background.
         //
@@ -406,12 +408,11 @@ impl PPU {
         }
 
         for tile in 0..(FRAME_WIDTH_TILES as usize) {
-            let addr: u16 = self.registers.addr.into();
-            let nametable_addr: u16 = self.get_nametable_addr() + addr;
-            let pat_table_addr = self.bg_table_base() + self.vram_read(nametable_addr) as u16;
+            let nametable_addr: u16 = self.nametable_base() | self.registers.addr.to_u16();
+            let pat_table_addr = self.bg_table_base() | self.vram_read(nametable_addr) as u16;
 
             let d4 = 0_u8; // Rendering background
-            let d3_d2 = self.read_attr_table(addr);
+            let d3_d2 = self.read_attr_table(nametable_addr);
 
             self.ppu_addr_next();
 
@@ -420,7 +421,6 @@ impl PPU {
             let pattern_hi = self.pattern_table_read(pat_table_addr + HIGH_OFFSET_BYTES);
             let color_idx = tile_lohi_to_idx(pattern_lo, pattern_hi);
 
-            // Assign all pixels as the same color value so we get a grayscale version
             for (px, color) in color_idx.iter().enumerate() {
                 let buf_addr = PX_SIZE_BYTES
                     * (((self.scanline as usize) * (WIDTH_TILES as usize) + tile)
@@ -430,7 +430,7 @@ impl PPU {
                 let idx = (d4 << 4) | (d3_d2 << 2) | color;
 
                 let color = PALETTE_TABLE[idx as usize];
-                event!(Level::DEBUG, "writing addres {:#X}", buf_addr);
+                event!(Level::DEBUG, "writing address {:#X}", buf_addr);
                 self.frame_buf[buf_addr..(buf_addr + PX_SIZE_BYTES)]
                     .swap_with_slice(&mut to_u8_slice(color));
             }

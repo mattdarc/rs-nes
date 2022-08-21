@@ -54,6 +54,10 @@ impl PpuAddr {
     pub fn incr(&mut self, amt: u16) {
         self.0 = (self.0 + amt) & 0x3FFF;
     }
+
+    pub fn to_u16(self) -> u16 {
+        self.0
+    }
 }
 
 impl std::convert::Into<u16> for PpuAddr {
