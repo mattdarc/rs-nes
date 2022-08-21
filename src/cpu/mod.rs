@@ -94,17 +94,28 @@ impl<BusType: Bus> CPU<BusType> {
     }
 
     pub fn clock(&mut self) -> ExitStatus {
-        let _enter = span!(Level::TRACE, "Clock", cycles = self.bus.cycles());
-        self.execute_instruction();
-        if let Some(status) = self.bus.pop_nmi() {
-            event!(Level::INFO, NMI.status = status);
-            self.handle_nmi(status);
+        let cpu_span = span!(
+            target: "cpu",
+            Level::TRACE,
+            "clock",
+            cycles = self.bus.cycles()
+        );
+        {
+            let _enter = cpu_span.enter();
+            self.execute_instruction();
+            if let Some(status) = self.bus.pop_nmi() {
+                event!(Level::INFO, NMI.status = status);
+                self.handle_nmi(status);
+            }
         }
 
         self.bus.clock(self.cycles);
         self.exit_status.clone()
     }
 
+    // FIXME: Remove this. Develop a utility that parses the nestest.log and reports state for each
+    // cycle, then compares the state to the actual running state. This should be done once the PPU
+    // is complete (or close to it)
     pub fn log_cpu_state(&mut self) {
         const LOG_CPU_STATE: bool = true;
         if !LOG_CPU_STATE {
@@ -156,13 +167,6 @@ impl<BusType: Bus> CPU<BusType> {
     }
 
     fn handle_nmi(&mut self, _status: u8) {
-        let _enter_nmi = span!(
-            Level::TRACE,
-            "Handling NMI",
-            PC = self.pc,
-            STATUS = self.status.bits()
-        );
-
         self.push16(self.pc);
         self.push8(self.status.bits());
         self.status.set(Status::INT_DISABLE, true);
@@ -170,7 +174,7 @@ impl<BusType: Bus> CPU<BusType> {
         // Load address of interrupt handler, set PC to execute there
         self.bus.clock(2);
         self.pc = self.bus.read16(IRQ_HANDLER_ADDR);
-        event!(Level::TRACE, "IRQ: 0x{:>4X}", self.pc);
+        event!(Level::TRACE, "IRQ: {:#04X}", self.pc);
     }
 
     fn execute_instruction(&mut self) {

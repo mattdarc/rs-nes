@@ -64,6 +64,7 @@ impl NesBus {
 }
 
 impl Bus for NesBus {
+    #[tracing::instrument(target = "bus", skip(self), ret)]
     fn read(&self, addr: u16) -> u8 {
         // FIXME: *Could* make each of these components conform to a common interface which has
         // read/write register, but the NES is fixed HW so I don't see the benefit ATM
@@ -88,10 +89,10 @@ impl Bus for NesBus {
             }
             0x4020..=0xFFFF => self.game.prg_read(addr),
         };
-        self.dump_instr("read", addr, value);
         value
     }
 
+    #[tracing::instrument(target = "bus", skip(self))]
     fn write(&mut self, addr: u16, val: u8) {
         self.dump_instr("write", addr, val);
 

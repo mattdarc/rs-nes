@@ -77,8 +77,6 @@ impl VNES {
             }
 
             let status = self.cpu.clock();
-            event!(Level::DEBUG, "clock: {:?}", status);
-
             match status {
                 ExitStatus::Continue => {}
                 ExitStatus::ExitSuccess => return Ok(()),

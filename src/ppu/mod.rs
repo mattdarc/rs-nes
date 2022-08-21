@@ -261,6 +261,7 @@ impl PPU {
         // self.show_pattern_table();
     }
 
+    #[tracing::instrument(target = "ppu", skip(self))]
     pub fn clock(&mut self, ticks: i16) {
         self.cycle += ticks;
         if self.cycle < CYCLES_PER_SCANLINE {
@@ -291,7 +292,7 @@ impl PPU {
             1 => 0x2400,
             2 => 0x2800,
             3 => 0x2C00,
-            _ => unreachable!("Nametable address should be 2 bits!"),
+            _ => unreachable!(),
         }
     }
 
@@ -360,8 +361,6 @@ impl PPU {
             "Should not render during non-visible scanline {}",
             self.scanline
         );
-
-        let bank = self.bg_table_base();
 
         for tile in 0..(FRAME_WIDTH_TILES as usize) {
             let addr: u16 = self.registers.addr.into();
