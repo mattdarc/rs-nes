@@ -7,9 +7,9 @@ use crate::ppu::*;
 use tracing::{event, Level};
 
 pub trait Bus {
-    fn read(&self, addr: u16) -> u8;
+    fn read(&mut self, addr: u16) -> u8;
     fn write(&mut self, addr: u16, val: u8);
-    fn read16(&self, addr: u16) -> u16 {
+    fn read16(&mut self, addr: u16) -> u16 {
         // Bus reads do not cross pages, they wrap around page boundaries
         let next_addr = (addr & 0xFF00) | ((addr + 1) & 0xFF);
         (self.read(addr) as u16) | ((self.read(next_addr) as u16) << 8)
@@ -65,7 +65,7 @@ impl NesBus {
 
 impl Bus for NesBus {
     #[tracing::instrument(target = "bus", skip(self), ret)]
-    fn read(&self, addr: u16) -> u8 {
+    fn read(&mut self, addr: u16) -> u8 {
         // FIXME: *Could* make each of these components conform to a common interface which has
         // read/write register, but the NES is fixed HW so I don't see the benefit ATM
         let value = match addr {

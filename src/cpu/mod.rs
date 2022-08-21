@@ -53,7 +53,6 @@ pub struct CPU<BusType: Bus> {
     operands: [u8; 2],
     instruction: Instruction,
     cycles: u8,
-    reset_vector: u16,
 
     exit_status: ExitStatus,
     log_file: Option<File>,
@@ -61,8 +60,7 @@ pub struct CPU<BusType: Bus> {
 }
 
 impl<BusType: Bus> CPU<BusType> {
-    pub fn new(bus: BusType, reset_vector: u16) -> Self {
-        event!(Level::DEBUG, "new cpu: reset vector 0x{:04X}", reset_vector);
+    pub fn new(bus: BusType) -> Self {
         CPU {
             acc: 0,
             x: 0,
@@ -75,7 +73,6 @@ impl<BusType: Bus> CPU<BusType> {
             exit_status: ExitStatus::Continue,
             operands: [0; 2],
             cycles: 0,
-            reset_vector,
 
             log_file: None,
             logging_enabled: false,
@@ -83,14 +80,15 @@ impl<BusType: Bus> CPU<BusType> {
     }
 
     pub fn reset_override(&mut self, pc: u16) {
-        event!(Level::DEBUG, "reset PC {} -> {}", FROM = self.pc, TO = pc);
+        event!(Level::DEBUG, "reset PC {:#X} -> {:#X}", self.pc, pc);
         self.pc = pc;
         self.status = Status::default();
         self.sp = 0xFD;
     }
 
     pub fn reset(&mut self) {
-        self.reset_override(self.bus.read16(RESET_VECTOR_START));
+        let pc = self.bus.read16(RESET_VECTOR_START);
+        self.reset_override(pc);
     }
 
     pub fn clock(&mut self) -> ExitStatus {
@@ -193,7 +191,10 @@ impl<BusType: Bus> CPU<BusType> {
 
         let mut operand_str = String::new();
         for i in 0..num_operands {
-            operand_str += &format!("{:#02X} ", self.operands[i]);
+            operand_str.insert_str(0, &format!("{:02X}", self.operands[i]));
+        }
+        if !operand_str.is_empty() {
+            operand_str.insert_str(0, "0x");
         }
 
         event!(
@@ -788,13 +789,6 @@ impl<BusType: Bus> CPU<BusType> {
     fn sta(&mut self) {
         let addr = self.calc_addr();
         self.bus.write(addr, self.acc);
-        event!(
-            Level::INFO,
-            "0x{:>4X}: STA 0x{:X} -> 0x{:>4X}",
-            self.pc,
-            ACC = self.acc,
-            MEM = addr,
-        );
     }
 
     fn stx(&mut self) {

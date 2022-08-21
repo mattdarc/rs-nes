@@ -1,4 +1,5 @@
 #![allow(dead_code)]
+#![feature(exclusive_range_pattern)]
 
 extern crate sdl2;
 
@@ -18,7 +19,6 @@ mod memory;
 
 use cartridge::*;
 use cpu::*;
-use tracing::{event, Level};
 
 pub type NesBus = bus::NesBus;
 pub type NesCPU = CPU<NesBus>;
@@ -44,9 +44,7 @@ impl VNES {
     pub fn new(rom: &str) -> std::io::Result<Self> {
         let game = Cartridge::load(rom)?;
         let bus = NesBus::new(game, Box::new(graphics::sdl2::SDLRenderer::new()));
-        Ok(VNES {
-            cpu: CPU::new(bus, RESET_VECTOR_START),
-        })
+        Ok(VNES { cpu: CPU::new(bus) })
     }
 
     pub fn reset_override(&mut self, pc: u16) {
