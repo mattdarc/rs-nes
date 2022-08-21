@@ -40,7 +40,6 @@ pub struct Registers {
     pub oamdata: u8,
     pub scroll: u8,
     pub addr: PpuAddr,
-    pub data: u8,
 }
 
 #[derive(Default, Clone, Copy, Debug)]
@@ -48,7 +47,7 @@ pub struct PpuAddr(u16);
 
 impl PpuAddr {
     pub fn write(&mut self, val: u8) {
-        // 0x0000 - 0x3FFF mirrored at greater addresses
+        // Valid addresses are $0000-$3FFF; higher addresses will be mirrored down.
         self.0 = ((self.0 << 8) | (val as u16)) & 0x3FFF;
     }
 

@@ -168,8 +168,8 @@ impl PPU {
     }
 
     // FIXME: These implement some special behavior after beiing accessed
-    pub fn register_read(&self, addr: u16) -> u8 {
-        match (addr - 0x2000) % 8 {
+    pub fn register_read(&mut self, addr: u16) -> u8 {
+        let ret = match (addr - 0x2000) % 8 {
             0 => self.registers.ctrl,
             1 => self.registers.mask,
             2 => self.registers.status,
@@ -177,12 +177,32 @@ impl PPU {
             4 => self.registers.oamdata,
             5 => self.registers.scroll,
             6 => panic!("Cannot read PPU address!"),
-            7 => self.registers.data,
+            7 => {
+                let addr: u16 = self.registers.addr.into();
+                self.ppu_addr_next();
+                self.vram_read(addr)
+            }
             _ => panic!("Invalid PPU Register read: address {:X}", addr),
-        }
+        };
+
+        event!(
+            Level::DEBUG,
+            "ppu::register_read [{:#X}] (== {:#X})",
+            addr,
+            ret
+        );
+
+        ret
     }
 
     pub fn register_write(&mut self, addr: u16, val: u8) {
+        event!(
+            Level::DEBUG,
+            "ppu::register_write [{:#X}] = {:#X}",
+            addr,
+            val
+        );
+
         match (addr - 0x2000) % 8 {
             0 => self.registers.ctrl = val,
             1 => self.registers.mask = val,
@@ -191,14 +211,23 @@ impl PPU {
             4 => self.registers.oamdata = val,
             5 => self.registers.scroll = val,
             6 => self.registers.addr.write(val),
-            7 => self.registers.data = val,
-            _ => panic!("Invalid PPU Register write: address {:X}", addr),
+            7 => {
+                let addr: u16 = self.registers.addr.into();
+                self.ppu_addr_next();
+                self.vram_write(addr, val);
+            }
+            _ => panic!("Invalid PPU Register write: address {:#X}", addr),
         }
     }
 
     fn vram_read(&self, addr: u16) -> u8 {
         self.vram
             .read(mirror(self.game.header().get_mirroring(), addr))
+    }
+
+    fn vram_write(&mut self, addr: u16, val: u8) {
+        self.vram
+            .write(mirror(self.game.header().get_mirroring(), addr), val)
     }
 
     fn ppu_addr_next(&mut self) {
@@ -211,7 +240,7 @@ impl PPU {
     }
 
     fn pattern_table_read(&self, addr: u16) -> u8 {
-        assert!(0 <= addr && addr < 0x1FFF);
+        assert!(addr < 0x1FFF);
         self.game.chr_read(addr)
     }
 
@@ -239,6 +268,10 @@ impl PPU {
             && !self.has_sprite0_hit()
     }
 
+    fn rendering_enabled(&self) -> bool {
+        (self.registers.mask & (PpuMask::SHOW_SPRITES | PpuMask::SHOW_BG)) != 0
+    }
+
     fn do_start_vblank(&mut self) {
         self.registers.status &= !PpuStatus::SPRITE_0_HIT;
         self.registers.status |= PpuStatus::VBLANK_STARTED;
@@ -254,7 +287,7 @@ impl PPU {
         self.registers.status &= !PpuStatus::SPRITE_0_HIT;
         self.registers.status &= !PpuStatus::VBLANK_STARTED;
         self.flags.odd = !self.flags.odd;
-        event!(Level::INFO, "end frame {}", status = self.registers.status);
+        event!(Level::INFO, "end frame {:#02X}", self.registers.status);
 
         // TODO: This should be done on a line basis in do_end_scanline
         self.render_frame();
@@ -272,17 +305,23 @@ impl PPU {
             self.registers.status |= PpuStatus::SPRITE_0_HIT;
         }
 
-        if 0 <= self.scanline && self.scanline < VISIBLE_SCANLINES {
-            self.write_scanline();
+        const NOP_SCANLINES: i16 = VISIBLE_SCANLINES + 1;
+        match self.scanline {
+            0 => {
+                self.registers.status &= !PpuStatus::VBLANK_STARTED;
+                self.write_scanline();
+            }
+            -1 | 1..VISIBLE_SCANLINES => self.write_scanline(),
+            VISIBLE_SCANLINES => self.do_start_vblank(),
+            NOP_SCANLINES..SCANLINES_PER_FRAME => {}
+            SCANLINES_PER_FRAME => self.do_end_frame(),
+            _ => unreachable!(),
         }
 
         self.cycle -= CYCLES_PER_SCANLINE;
         self.scanline += 1;
-
-        if self.scanline == VISIBLE_SCANLINES {
-            self.do_start_vblank()
-        } else if self.scanline == SCANLINES_PER_FRAME {
-            self.do_end_frame()
+        if self.scanline > SCANLINES_PER_FRAME {
+            self.scanline = -1;
         }
     }
 
@@ -357,10 +396,14 @@ impl PPU {
     ///  4. Palette table tile high (+8 bytes)
     fn write_scanline(&mut self) {
         assert!(
-            self.scanline >= 0 && self.scanline < VISIBLE_SCANLINES,
+            self.scanline < VISIBLE_SCANLINES,
             "Should not render during non-visible scanline {}",
             self.scanline
         );
+
+        if !self.rendering_enabled() {
+            return;
+        }
 
         for tile in 0..(FRAME_WIDTH_TILES as usize) {
             let addr: u16 = self.registers.addr.into();
