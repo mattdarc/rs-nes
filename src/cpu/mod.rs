@@ -79,6 +79,10 @@ impl<BusType: Bus> CPU<BusType> {
         }
     }
 
+    pub fn pc(&self) -> u16 {
+        self.pc
+    }
+
     pub fn reset_override(&mut self, pc: u16) {
         event!(Level::DEBUG, "reset PC {:#X} -> {:#X}", self.pc, pc);
         self.pc = pc;

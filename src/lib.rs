@@ -31,6 +31,7 @@ pub enum NesError {
 #[derive(Debug, Clone)]
 pub enum ExitStatus {
     Continue,
+    Breakpoint(u16),
     ExitSuccess,
     ExitInterrupt, // TODO: Temporary. Used to exit nestest
     ExitError(String),
@@ -39,6 +40,8 @@ pub enum ExitStatus {
 pub struct VNES {
     cpu: cpu::CPU<bus::NesBus>,
 }
+
+type NesResult = Result<(), String>;
 
 impl VNES {
     pub fn new(rom: &str) -> std::io::Result<Self> {
@@ -55,33 +58,48 @@ impl VNES {
         self.cpu.reset();
     }
 
-    pub fn play(&mut self) -> Result<(), String> {
+    pub fn run_once(&mut self) -> ExitStatus {
         use graphics::sdl2::SDL2Intrf;
         use sdl2::{event::Event, keyboard::Keycode};
         use std::time::Duration;
-
         let mut event_pump = SDL2Intrf::context().event_pump().unwrap();
 
+        for event in event_pump.poll_iter() {
+            match event {
+                Event::Quit { .. }
+                | Event::KeyDown {
+                    keycode: Some(Keycode::Escape),
+                    ..
+                } => return ExitStatus::ExitInterrupt,
+                _ => {}
+            }
+        }
+        ::std::thread::sleep(Duration::new(0, graphics::constants::FRAME_RATE_NS));
+
+        self.cpu.clock()
+    }
+
+    // FIXME: Set a SW breakpoint in the CPU instead of doing this
+    pub fn run_until(&mut self, pc: u16) -> ExitStatus {
+        while self.cpu.pc() < pc {
+            match self.run_once() {
+                ExitStatus::Continue => {}
+                status => return status,
+            }
+        }
+
+        ExitStatus::Breakpoint(self.cpu.pc())
+    }
+
+    pub fn play(&mut self) -> Result<(), String> {
         loop {
-            for event in event_pump.poll_iter() {
-                match event {
-                    Event::Quit { .. }
-                    | Event::KeyDown {
-                        keycode: Some(Keycode::Escape),
-                        ..
-                    } => return Ok(()),
-                    _ => {}
+            match self.run_once() {
+                ExitStatus::Continue => {}
+                ExitStatus::ExitError(e) => return Err(e),
+                ExitStatus::Breakpoint(_) | ExitStatus::ExitSuccess | ExitStatus::ExitInterrupt => {
+                    return Ok(())
                 }
             }
-
-            let status = self.cpu.clock();
-            match status {
-                ExitStatus::Continue => {}
-                ExitStatus::ExitSuccess => return Ok(()),
-                ExitStatus::ExitError(e) => return Err(e),
-                ExitStatus::ExitInterrupt => return Ok(()),
-            }
-            ::std::thread::sleep(Duration::new(0, graphics::constants::FRAME_RATE_NS));
         }
     }
 }

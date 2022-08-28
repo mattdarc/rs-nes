@@ -13,30 +13,13 @@ use venus::VNES;
 fn nestest() {
     use std::fs;
 
-    // FIXME: Use this for the log file in the nestest
-    // Configure a custom event formatter
-    let format = fmt::format()
-        .with_level(true) // include levels in formatted output
-        .with_target(false) // don't include targets
-        .with_thread_ids(false) // include the thread ID of the current thread
-        .with_thread_names(false) // include the name of the current thread
-        .without_time()
-        .compact(); // use the `Compact` formatting style.
-
-    // Create a `fmt` subscriber that uses our custom event format, and set it
-    // as the default.
-    tracing_subscriber::fmt()
-        .event_format(format)
-        .with_max_level(Level::INFO)
-        .init();
+    const GOLD_FILE: &str = "test/nestest.log.gold";
+    let nestest_state = NestestParser::read(GOLD_FILE).expect("Error reading gold file");
 
     let mut nes = VNES::new("test/nestest.nes").expect("Could not load nestest ROM");
     const NESTEST_AUTOMATED_START: u16 = 0xC000;
     nes.reset_override(NESTEST_AUTOMATED_START);
-    nes.play().expect("Error running game");
-
-    const GOLD_FILE: &str = "test/nestest.log.gold";
-    let gold_txt = fs::read_to_string(GOLD_FILE).expect("Error reading gold file");
+    nes.play().expect("Error running nestest.nes");
 
     const LOG_FILE: &str = "test/nestest.log";
     let log_txt = fs::read_to_string(LOG_FILE).expect("Error reading log file");
