@@ -31,6 +31,62 @@ impl PpuStatus {
     pub const PREV_LSB: u8 = 0x1F;
 }
 
+#[derive(Eq, PartialEq)]
+enum ScrollNextWrite {
+    X,
+    Y,
+}
+
+impl Default for ScrollNextWrite {
+    fn default() -> Self {
+        ScrollNextWrite::X
+    }
+}
+
+#[derive(Default)]
+pub struct PpuScroll {
+    x: u8,
+    y: u8,
+    next_y: Option<u8>,
+    next_wr: ScrollNextWrite,
+}
+
+impl PpuScroll {
+    pub fn update_y_latch(&mut self) {
+        if let Some(y) = self.next_y {
+            self.y = y;
+        }
+
+        self.next_y = None;
+    }
+
+    pub fn reset_addr(&mut self) {
+        self.next_wr = ScrollNextWrite::X;
+    }
+
+    // Changes made to the vertical scroll during rendering will only take effect on the next
+    // frame. Always updating the value at frame end should be sufficient
+    pub fn write(&mut self, val: u8) {
+        match self.next_wr {
+            ScrollNextWrite::X => {
+                self.x = val;
+                self.next_wr = ScrollNextWrite::Y;
+            }
+            ScrollNextWrite::Y => {
+                self.next_y = Some(val);
+            }
+        }
+    }
+
+    pub fn x(&self) -> u8 {
+        self.x
+    }
+
+    pub fn y(&self) -> u8 {
+        self.y
+    }
+}
+
 #[derive(Default)]
 pub struct Registers {
     pub ctrl: u8,
@@ -38,7 +94,7 @@ pub struct Registers {
     pub status: u8,
     pub oamaddr: u8,
     pub oamdata: u8,
-    pub scroll: u8,
+    pub scroll: PpuScroll,
     pub addr: PpuAddr,
 }
 

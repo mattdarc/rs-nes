@@ -19,6 +19,7 @@ fn main() -> Result<(), String> {
             .compact()
             .with_filter(tracing_subscriber::filter::filter_fn(|metadata| {
                 metadata.target() == format!("venus::{}", DEBUG_COMPONENT)
+                    && metadata.level() <= &Level::INFO
             }))
             .boxed(),
     ); // use the `Compact` formatting style.

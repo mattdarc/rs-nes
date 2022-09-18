@@ -172,10 +172,13 @@ impl PPU {
         let ret = match (addr - 0x2000) % 8 {
             0 => self.registers.ctrl,
             1 => self.registers.mask,
-            2 => self.registers.status,
+            2 => {
+                self.registers.scroll.reset_addr();
+                self.registers.status
+            }
             3 => self.registers.oamaddr,
             4 => self.registers.oamdata,
-            5 => self.registers.scroll,
+            5 => panic!("Cannot read PPU scroll!"),
             6 => panic!("Cannot read PPU address!"),
             7 => {
                 let addr: u16 = self.registers.addr.into();
@@ -210,8 +213,17 @@ impl PPU {
             1 => self.registers.mask = val,
             2 => self.registers.status = val,
             3 => self.registers.oamaddr = val,
-            4 => self.registers.oamdata = val,
-            5 => self.registers.scroll = val,
+            4 => {
+                // For emulation purposes, it is probably best to completely ignore writes during
+                // rendering.
+                //
+                // https://www.nesdev.org/wiki/PPU_registers#OAMDATA
+                if self.scanline >= VISIBLE_SCANLINES {
+                    self.registers.oamdata = val;
+                    self.registers.oamaddr += 1;
+                }
+            }
+            5 => self.registers.scroll.write(val),
             6 => self.registers.addr.write(val),
             7 => {
                 let addr: u16 = self.registers.addr.into();
@@ -288,10 +300,11 @@ impl PPU {
         self.flags.has_nmi = false;
         self.registers.status &= !PpuStatus::SPRITE_0_HIT;
         self.registers.status &= !PpuStatus::VBLANK_STARTED;
+        self.registers.scroll.update_y_latch();
         self.flags.odd = !self.flags.odd;
         event!(Level::INFO, "end frame {:#02X}", self.registers.status);
 
-        // TODO: This should be done on a line basis in do_end_scanline
+        // FIXME: This should be done on a line basis in do_visible_scanline
         self.render_frame();
         // self.show_pattern_table();
     }
@@ -303,17 +316,20 @@ impl PPU {
             return;
         }
 
-        if self.is_sprite0_hit() {
-            self.registers.status |= PpuStatus::SPRITE_0_HIT;
-        }
-
+        // FIXME: Do I need to implement this behavior? SW could read this register (apparently
+        // Micro Machines does this)
+        //
+        //  * Cycles 1-64: Secondary OAM (32-byte buffer for current sprites on scanline) is
+        //    initialized to $FF - attempting to read $2004 will return $FF
+        //  * Cycles 257-320: (the sprite tile loading interval) of the pre-render and visible
+        //    scanlines. OAMADDR is set to 0 during each of ticks
         const NOP_SCANLINES: i16 = VISIBLE_SCANLINES + 1;
         match self.scanline {
             0 => {
                 self.registers.status &= !PpuStatus::VBLANK_STARTED;
-                self.write_scanline();
+                self.do_visible_scanline();
             }
-            -1 | 1..VISIBLE_SCANLINES => self.write_scanline(),
+            -1 | 1..VISIBLE_SCANLINES => self.do_visible_scanline(),
             VISIBLE_SCANLINES => self.do_start_vblank(),
             NOP_SCANLINES..SCANLINES_PER_FRAME => {}
             SCANLINES_PER_FRAME => self.do_end_frame(),
@@ -390,6 +406,30 @@ impl PPU {
         nmi
     }
 
+    /// Visible scanline, each of which the PPU:
+    ///  1. Clears the list of sprites to draw
+    ///  2. Chooses the first 8 sprites on the scanline to draw
+    ///  3. Checks for anymore sprites on the scanline to set the sprite overflow flag
+    ///  4. Actually draws the sprites
+    ///
+    /// https://www.nesdev.org/wiki/PPU_sprite_evaluation
+    fn do_visible_scanline(&mut self) {
+        // The value of OAMADDR when sprite evaluation starts at tick 65 of the visible scanlines
+        // will determine where in OAM sprite evaluation starts, and hence which sprite gets
+        // treated as sprite 0. The first OAM entry to be checked during sprite evaluation is the
+        // one starting at OAM[OAMADDR]. If OAMADDR is unaligned and does not point to the y
+        // position (first byte) of an OAM entry, then whatever it points to (tile index,
+        // attribute, or x coordinate) will be reinterpreted as a y position, and the following
+        // bytes will be similarly reinterpreted. No more sprites will be found once the end of OAM
+        // is reached, effectively hiding any sprites before OAM[OAMADDR].
+
+        if self.is_sprite0_hit() {
+            self.registers.status |= PpuStatus::SPRITE_0_HIT;
+        }
+
+        self.write_scanline();
+    }
+
     /// Renders a tile at a time, since that's what data we get intially. There are four reads
     /// required to render a full tile:
     ///  1. Name table Byte
@@ -416,7 +456,7 @@ impl PPU {
 
             self.ppu_addr_next();
 
-            const HIGH_OFFSET_BYTES: u16 = 8;
+            const HIGH_OFFSET_BYTES: u16 = 8; // The next bitplane for this tile
             let pattern_lo = self.pattern_table_read(pat_table_addr);
             let pattern_hi = self.pattern_table_read(pat_table_addr + HIGH_OFFSET_BYTES);
             let color_idx = tile_lohi_to_idx(pattern_lo, pattern_hi);
