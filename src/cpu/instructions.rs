@@ -25,7 +25,7 @@ pub fn is_branch(inst: &Instruction) -> bool {
     }
 }
 
-#[derive(Copy, Clone, Debug, PartialEq)]
+#[derive(Copy, Clone, Debug, PartialEq, Eq)]
 pub enum AddressingMode {
     ZeroPage,    // 1 byte
     ZeroPageX,   // 2 byte
@@ -42,7 +42,7 @@ pub enum AddressingMode {
     Implied,     // 1 byte
 }
 
-#[derive(Copy, Clone, PartialEq)]
+#[derive(Copy, Clone, PartialEq, Eq)]
 pub enum InstrName {
     // CC == 0b01
     ORA,
@@ -222,7 +222,7 @@ impl std::fmt::Debug for InstrName {
     }
 }
 
-#[derive(Copy, Clone, PartialEq)]
+#[derive(Copy, Clone, PartialEq, Eq)]
 pub struct Instruction {
     opcode: u8,
     name: InstrName,
@@ -242,6 +242,14 @@ impl std::fmt::Display for Instruction {
 impl std::fmt::Debug for Instruction {
     fn fmt(&self, fmt: &mut std::fmt::Formatter<'_>) -> Result<(), std::fmt::Error> {
         write!(fmt, "{}", self)
+    }
+}
+
+impl std::str::FromStr for Instruction {
+    type Err = std::num::ParseIntError;
+
+    fn from_str(s: &str) -> Result<Self, Self::Err> {
+        Ok(OPCODES[usize::from_str_radix(s, 16)?])
     }
 }
 

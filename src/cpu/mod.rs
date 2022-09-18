@@ -1,13 +1,12 @@
-mod instructions;
+pub mod instructions;
 mod status;
 
 use {
     crate::bus::Bus,
     crate::ExitStatus,
-    instructions::{decode_instruction, Instruction},
+    instructions::Instruction,
     status::Status,
-    std::fs::File,
-    std::io::prelude::*,
+    std::stringify,
     tracing::{event, span, Level},
 };
 
@@ -40,6 +39,57 @@ enum TargetAddress {
     None,
 }
 
+// FIXME: Write a proc macro for this
+macro_rules! buildable {
+    ($result:ident; $name: ident {
+        $($fld:ident: $type: ty $(,)?)*
+    }) => {
+        #[derive(Clone, Debug, Eq, PartialEq)]
+        pub struct $result {
+            $(pub $fld: $type,)*
+        }
+
+        #[derive(Clone, Debug, Default)]
+        pub struct $name {
+            $($fld: Option<$type>,)*
+        }
+
+        impl $name {
+            pub fn new() -> Self {
+                CpuStateBuilder::default()
+            }
+
+            pub fn build(self) -> $result {
+                $result {
+                    $(
+                        $fld: self.$fld.expect(
+                            &format!("Field '{}' uninitialized", stringify!($fld))
+                        ),
+                    )*
+                }
+            }
+$(
+            pub fn $fld(mut self, $fld: $type) -> Self {
+                assert!(self.$fld.is_none());
+                self.$fld = Some($fld);
+                self
+            }
+)*
+        }
+    };
+}
+
+buildable!(CpuState; CpuStateBuilder {
+    cycles: usize,
+    instruction: Instruction,
+    operands: Vec<u8>,
+    acc: u8,
+    x: u8,
+    y: u8,
+    pc: u16,
+    sp: u8,
+});
+
 pub struct CPU<BusType: Bus> {
     acc: u8,
     x: u8,
@@ -47,16 +97,16 @@ pub struct CPU<BusType: Bus> {
     pc: u16,
     sp: u8,
     status: Status,
+    old_state: Option<CpuState>,
     bus: BusType,
 
+    // FIXME: do I still need this?
     // cache them in the NES for logging
-    operands: [u8; 2],
+    operands: Vec<u8>,
     instruction: Instruction,
     cycles: u8,
 
     exit_status: ExitStatus,
-    log_file: Option<File>,
-    logging_enabled: bool,
 }
 
 impl<BusType: Bus> CPU<BusType> {
@@ -68,19 +118,36 @@ impl<BusType: Bus> CPU<BusType> {
             pc: 0,
             sp: 0xFD,
             status: Status::empty(),
+            old_state: None,
             bus,
             instruction: Instruction::nop(),
             exit_status: ExitStatus::Continue,
-            operands: [0; 2],
+            operands: Vec::new(),
             cycles: 0,
-
-            log_file: None,
-            logging_enabled: false,
         }
     }
 
     pub fn pc(&self) -> u16 {
         self.pc
+    }
+
+    fn save_cpu_state(&mut self) {
+        self.old_state = Some(CpuState {
+            cycles: self.bus.cycles(),
+            instruction: self.instruction,
+            operands: self.operands.clone(),
+            acc: self.acc,
+            x: self.x,
+            y: self.y,
+            pc: self.pc,
+            sp: self.sp,
+        });
+    }
+
+    pub fn state(&self) -> &CpuState {
+        self.old_state
+            .as_ref()
+            .expect("CPU has not run. There is no state")
     }
 
     pub fn reset_override(&mut self, pc: u16) {
@@ -115,59 +182,6 @@ impl<BusType: Bus> CPU<BusType> {
         self.exit_status.clone()
     }
 
-    // FIXME: Remove this. Develop a utility that parses the nestest.log and reports state for each
-    // cycle, then compares the state to the actual running state. This should be done once the PPU
-    // is complete (or close to it)
-    pub fn log_cpu_state(&mut self) {
-        const LOG_CPU_STATE: bool = true;
-        if !LOG_CPU_STATE {
-            return;
-        }
-
-        let log_file = self.log_file.get_or_insert_with(|| {
-            File::create("test/nestest.log").expect("Error creating log file")
-        });
-
-        let opcode = self.instruction.opcode();
-        let instruction = decode_instruction(opcode);
-        let mut operand_str = String::new();
-        for i in 0..instruction.size() - 1 {
-            operand_str += &format!("{:0>2X} ", self.operands[i as usize]);
-        }
-
-        let decoded_str = match instruction.size() {
-            1 => String::new(),
-            2 => format!("${:02X}", self.operands[0]),
-            3 => format!("${:02X}{:02X}", self.operands[1], self.operands[0]),
-            _ => unreachable!(),
-        };
-
-        // NOTE: Do not modify this. It is in the same format as the nestest log
-        // pc instr arg0 arg1 decoded
-        // C000  4C F5 C5  JMP $C5F5                           A:00 X:00 Y:00 P:24 SP:FD PPU:  0, 21 CYC:7
-        let cpu_state = format!(
-            "{:04X}  {:02X} {:6} {:?} {}                       A:{:0>2X} X:{:0>2X} Y:{:0>2X} P:{:0>2X} SP:{:0>2X}             CYC:{}\n",
-            self.pc,
-            opcode,
-            operand_str,
-            self.instruction.name(),
-            decoded_str,
-            self.acc,
-            self.x,
-            self.y,
-            self.status.bits(),
-            self.sp,
-            self.bus.cycles(),
-        );
-        log_file
-            .write_all(cpu_state.as_bytes())
-            .or_else::<std::io::Error, _>(|io_err: std::io::Error| {
-                event!(Level::ERROR, "Failed to write to file\n\t {:?}", io_err);
-                Ok(())
-            })
-            .unwrap();
-    }
-
     fn handle_nmi(&mut self, _status: u8) {
         self.push16(self.pc);
         self.push8(self.status.bits());
@@ -189,6 +203,7 @@ impl<BusType: Bus> CPU<BusType> {
         self.cycles = self.instruction.cycles();
 
         let num_operands = (self.instruction.size() - 1) as usize;
+        self.operands.resize(num_operands, 0);
         for i in 0..num_operands {
             self.operands[i] = self.bus.read(self.pc + (i as u16) + 1);
         }
@@ -203,14 +218,15 @@ impl<BusType: Bus> CPU<BusType> {
 
         event!(
             Level::INFO,
-            "0x{:04X}> {:?} {}",
+            "{:#04X}> {:?} {}",
             self.pc,
             &self.instruction,
             operand_str,
         );
 
-        self.log_cpu_state();
-        // FIXME: incrementing the pc should go at the end
+        // FIXME: incrementing the pc should go at the end. All this should go into a post_execute
+        // function
+        self.save_cpu_state();
         self.pc += self.instruction.size();
 
         match self.instruction.name() {
@@ -393,33 +409,37 @@ impl<BusType: Bus> CPU<BusType> {
     fn calc_addr(&mut self) -> u16 {
         use instructions::AddressingMode::*;
 
-        let low_byte = self.operands[0];
-        let high_byte = self.operands[1];
-        let concat_bytes = |low, high| ((high as u16) << 8) | low as u16;
+        let op_or_zero = |i| {
+            if self.operands.len() > i {
+                self.operands[i]
+            } else {
+                0
+            }
+        };
+
+        let addr_lo = op_or_zero(0);
+        let addr_hi = op_or_zero(1);
+        let addr = ((addr_hi as u16) << 8) | addr_lo as u16;
 
         match self.instruction.mode() {
-            ZeroPage => low_byte as u16,
-            ZeroPageX => low_byte.wrapping_add(self.x) as u16,
-            ZeroPageY => low_byte.wrapping_add(self.y) as u16,
-            Absolute => concat_bytes(low_byte, high_byte),
+            ZeroPage => addr_lo as u16,
+            ZeroPageX => addr_lo.wrapping_add(self.x) as u16,
+            ZeroPageY => addr_lo.wrapping_add(self.y) as u16,
+            Absolute => addr,
             AbsoluteX => {
-                let addr_without_offset = concat_bytes(low_byte, high_byte);
-                let addr = addr_without_offset.wrapping_add(self.x as u16);
-
-                self.cycles += self.takes_extra_cycle(addr_without_offset, addr) as u8;
-                addr
+                let addr_x = addr.wrapping_add(self.x as u16);
+                self.cycles += self.takes_extra_cycle(addr, addr_x) as u8;
+                addr_x
             }
             AbsoluteY => {
-                let addr_without_offset = concat_bytes(low_byte, high_byte);
-                let addr = addr_without_offset.wrapping_add(self.y as u16);
-
-                self.cycles += self.takes_extra_cycle(addr_without_offset, addr) as u8;
-                addr
+                let addr_y = addr.wrapping_add(self.y as u16);
+                self.cycles += self.takes_extra_cycle(addr, addr_y) as u8;
+                addr_y
             }
-            Indirect => self.bus.read16(concat_bytes(low_byte, high_byte)),
-            IndirectX => self.bus.read16(low_byte.wrapping_add(self.x) as u16),
+            Indirect => self.bus.read16(addr),
+            IndirectX => self.bus.read16(addr_lo.wrapping_add(self.x) as u16),
             IndirectY => {
-                let addr_without_offset = self.bus.read16(low_byte as u16);
+                let addr_without_offset = self.bus.read16(addr_lo as u16);
                 let addr = addr_without_offset.wrapping_add(self.y as u16);
 
                 self.cycles += self.takes_extra_cycle(addr_without_offset, addr) as u8;

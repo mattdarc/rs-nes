@@ -21,7 +21,7 @@ impl TestBus {
 }
 
 impl Bus for TestBus {
-    fn read(&self, addr: u16) -> u8 {
+    fn read(&mut self, addr: u16) -> u8 {
         match addr {
             TEST_PROGRAM_START..=0xFFFF => self.program.read(addr),
             _ => self.ram.read(addr % 0x800),
@@ -55,7 +55,7 @@ fn initialize_program(data: &[u8]) -> CPU<TestBus> {
     program[RESET_VECTOR_START as usize + 1] = (TEST_PROGRAM_START >> 8) as u8;
 
     let bus = TestBus::new(&program);
-    let mut cpu = CPU::new(bus, RESET_VECTOR_START);
+    let mut cpu = CPU::new(bus);
     cpu.reset();
 
     // Default status is not empty, but we make it such for ease in the following tests

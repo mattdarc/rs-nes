@@ -28,7 +28,7 @@ pub enum NesError {
     Stub,
 }
 
-#[derive(Debug, Clone)]
+#[derive(Debug, Clone, Eq, PartialEq)]
 pub enum ExitStatus {
     Continue,
     Breakpoint(u16),
@@ -48,6 +48,10 @@ impl VNES {
         let game = Cartridge::load(rom)?;
         let bus = NesBus::new(game, Box::new(graphics::sdl2::SDLRenderer::new()));
         Ok(VNES { cpu: CPU::new(bus) })
+    }
+
+    pub fn state(&self) -> &cpu::CpuState {
+        self.cpu.state()
     }
 
     pub fn reset_override(&mut self, pc: u16) {
@@ -79,8 +83,8 @@ impl VNES {
         self.cpu.clock()
     }
 
-    // FIXME: Set a SW breakpoint in the CPU instead of doing this
     pub fn run_until(&mut self, pc: u16) -> ExitStatus {
+        // FIXME: Set a SW breakpoint in the CPU instead of doing this
         while self.cpu.pc() < pc {
             match self.run_once() {
                 ExitStatus::Continue => {}
