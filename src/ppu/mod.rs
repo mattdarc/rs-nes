@@ -198,6 +198,14 @@ impl PPU {
         ret
     }
 
+    pub fn oam_dma(&mut self, data: &[u8]) {
+        assert_eq!(data.len(), 256, "Data should be 1 full page");
+
+        for (i, chunk) in data.chunks(Sprite::BYTES_PER).enumerate() {
+            self.oam_primary[i] = Sprite::from(chunk);
+        }
+    }
+
     pub fn register_write(&mut self, addr: u16, val: u8) {
         event!(
             Level::DEBUG,
@@ -414,6 +422,8 @@ impl PPU {
     ///
     /// https://www.nesdev.org/wiki/PPU_sprite_evaluation
     fn do_visible_scanline(&mut self) {
+        let mut sprites_to_draw: Vec<Sprite> = Vec::new();
+
         // The value of OAMADDR when sprite evaluation starts at tick 65 of the visible scanlines
         // will determine where in OAM sprite evaluation starts, and hence which sprite gets
         // treated as sprite 0. The first OAM entry to be checked during sprite evaluation is the

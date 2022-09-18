@@ -70,7 +70,7 @@ impl RAM {
             addr,
             self.data.len(),
         );
-        self.data[addr as usize]
+        self.data[(addr & 0x07FF) as usize]
     }
 
     #[track_caller]

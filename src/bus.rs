@@ -69,7 +69,7 @@ impl Bus for NesBus {
         // FIXME: *Could* make each of these components conform to a common interface which has
         // read/write register, but the NES is fixed HW so I don't see the benefit ATM
         let value = match addr {
-            0x0..=0x1FFF => self.cpu_ram.read(addr % 0x800),
+            0x0..=0x1FFF => self.cpu_ram.read(addr),
             0x2000..=0x3FFF => self.ppu.register_read(addr),
             0x4000..=0x4015 => {
                 event!(Level::INFO, "read from APU");
@@ -98,13 +98,24 @@ impl Bus for NesBus {
 
         match addr {
             0x0..=0x1FFF => self.cpu_ram.write(addr % 0x800, val),
-            0x4000..=0x4015 => {} // self.apu.write_register(addr - 0x4000, val),
+            0x4000..0x4014 | 0x4015 => {} // self.apu.write_register(addr - 0x4000, val),
             // NOTE: Controllers can be written to to enable strobe mode
             0x4016 => event!(Level::INFO, "write to controller 1"),
             0x4017 => event!(Level::INFO, "write to controller 2"),
             0x4020..=0xFFFF => self.game.prg_write(addr, val),
             0x2000..=0x3FFF => self.ppu.register_write(addr, val),
-            _ => panic!("Tried to write to read-only address 0x{:X}", addr),
+            0x4014 => {
+                // FIXME: Could make this a direct access from the page and not a bunch of bus reads
+                const PAGE_SIZE: u16 = 256;
+                let dma_buffer = (0..PAGE_SIZE)
+                    .map(|lo| self.read((val as u16) << 8 | lo))
+                    .collect::<Vec<_>>();
+                self.ppu.oam_dma(dma_buffer.as_slice());
+            }
+            _ => panic!(
+                "Tried to write 0x{:X} to read-only address 0x{:X}",
+                val, addr
+            ),
         }
     }
 
