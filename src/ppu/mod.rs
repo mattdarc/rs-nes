@@ -394,7 +394,7 @@ impl PPU {
     }
 
     fn read_attr_table(&self, v: u16) -> u8 {
-        assert!(0x2000 <= v && v < 0x3FFF, "address {:#X} out of range", v);
+        assert!(0x2000 <= v && v < 0x4000, "address {:#X} out of range", v);
         // 120 attribute table is a 64-byte array at the end of each nametable that controls which
         // palette is assigned to each part of the background.
         //
