@@ -322,8 +322,8 @@ impl PPU {
         event!(Level::INFO, "end frame {:#02X}", self.registers.status);
 
         // FIXME: This should be done on a line basis in do_visible_scanline
-        // self.render_frame();
-        self.show_pattern_table();
+        self.render_frame();
+        // self.show_pattern_table();
     }
 
     #[tracing::instrument(target = "ppu", skip(self))]
@@ -439,16 +439,22 @@ impl PPU {
         let sprite_width = sprite::Sprite::pix_width(self.registers.ctrl & PpuCtrl::SPRITE_SIZE);
 
         let mut sprite_idx = 0;
-
         let mut m = 0;
-        for n in (0..256).step_by(4) {
+
+        // No more sprites will be found once the end of OAM
+        // is reached, effectively hiding any sprites before OAM[OAMADDR].
+        for n in (self.registers.oamaddr as usize..256_usize).step_by(4) {
             if sprite_idx == 8 {
                 // HW bug -- once we have exactly 8 sprites this starts being incremented along
                 // with n
                 m = (m + 1) & 0x3;
             }
 
-            let addr = (self.registers.oamaddr as usize + n + m) & 0xFF;
+            let addr = (n + m) as usize & 0xFF;
+
+            // If OAMADDR is unaligned and does not point to the y position (first byte) of an OAM
+            // entry, then whatever it points to (tile index, attribute, or x coordinate) will be
+            // reinterpreted as a y position, and the following bytes will be reinterpreted as well
             let sprite = Sprite::from(&self.oam_primary[addr..(addr + 4)]);
 
             if !sprite.in_scanline(self.scanline) {
@@ -473,14 +479,6 @@ impl PPU {
             sprite_idx,
             self.scanline
         );
-
-        // If OAMADDR is unaligned and does not point to the y
-        // position (first byte) of an OAM entry, then whatever it points to (tile index,
-        // attribute, or x coordinate) will be reinterpreted as a y position, and the following
-        // bytes will be similarly reinterpreted.
-
-        // No more sprites will be found once the end of OAM
-        // is reached, effectively hiding any sprites before OAM[OAMADDR].
 
         self.write_scanline();
     }
@@ -560,7 +558,7 @@ impl PPU {
             let nametable_addr: u16 = self.nametable_base() | self.registers.addr.to_u16();
             let pat_table_addr = self.sprite_table_base() | sprite.tile_num() as u16;
 
-            let d4 = 0_u8; // Rendering background
+            let d4 = 1_u8; // Rendering sprites
             let d3_d2 = self.read_attr_table(nametable_addr);
 
             const HIGH_OFFSET_BYTES: u16 = 8; // The next bitplane for this tile
@@ -650,7 +648,7 @@ impl PPU {
             assert!(used, "Unused address {:#X}", addr);
         }
 
-        // Format pattern table s.t. 0x000-0x0FFF are on the left and 0x1000-0x1FFF are on the
+        // Format the pattern table s.t. 0x000-0x0FFF are on the left and 0x1000-0x1FFF are on the
         // right
         let half_frame: usize = buf.len() / 2;
         const HALF_TILES: usize = TILE_HEIGHT_PX as usize * FRAME_WIDTH_PX as usize * PX_SIZE_BYTES;

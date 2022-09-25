@@ -42,7 +42,9 @@ pub struct SDLRenderer {
 
 impl SDLRenderer {
     pub fn new() -> Self {
-        SDLRenderer { canvas: None }
+        let mut renderer = SDLRenderer { canvas: None };
+        renderer.get_or_create_canvas();
+        renderer
     }
 
     fn get_or_create_canvas(&mut self) -> &mut WindowCanvas {
