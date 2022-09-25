@@ -21,7 +21,7 @@ pub mod constants {
     pub const WINDOW_NAME: &str = "Venus NES Emulator";
 
     // TODO these should not be constant, and should be able to be resized with the emulator screen
-    pub const WINDOW_WIDTH_MUL: u32 = 4;
+    pub const WINDOW_WIDTH_MUL: u32 = 5;
     pub const WINDOW_HEIGHT_MUL: u32 = 3;
     pub const WINDOW_WIDTH: u32 = NES_SCREEN_WIDTH * WINDOW_WIDTH_MUL;
     pub const WINDOW_HEIGHT: u32 = NES_SCREEN_HEIGHT * WINDOW_HEIGHT_MUL;

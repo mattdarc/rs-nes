@@ -58,12 +58,13 @@ impl SDLRenderer {
             .position_centered()
             .build()
             .unwrap();
+        const REFRESH_RATE_HZ: i32 = 30;
         window
             .set_display_mode(Some(DisplayMode::new(
                 PixelFormatEnum::RGB888,
                 WINDOW_WIDTH as i32,
                 WINDOW_HEIGHT as i32,
-                30,
+                REFRESH_RATE_HZ,
             )))
             .unwrap();
 
@@ -118,8 +119,6 @@ impl Renderer for SDLRenderer {
     /// Display a buffer buf on the screen. The format of the buffer is assumed to be in the RGB888
     /// format
     fn render_frame(&mut self, buf: &[u8], width: u32, height: u32) {
-        //dump_texture_buf(&buf, PX_SIZE_BYTES);
-
         let canvas = self.get_or_create_canvas();
         let creator = canvas.texture_creator();
         let mut texture = creator

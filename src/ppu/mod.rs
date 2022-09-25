@@ -61,16 +61,17 @@ use tracing::{event, Level};
 const SCANLINES_PER_FRAME: i16 = 262;
 const VISIBLE_SCANLINES: i16 = 241;
 const CYCLES_PER_SCANLINE: i16 = 341;
+
+const PX_SIZE_BYTES: usize = 4; // 4th byte for the pixel is unused
+
 const TILE_WIDTH_PX: u16 = 8;
 const TILE_HEIGHT_PX: u16 = 8;
-const PX_SIZE_BYTES: usize = 4; // 4th byte for the pixel is unused
-const WIDTH_TILES: u16 = 16;
 const TILE_SIZE_BYTES: u16 = 16;
 
 const FRAME_WIDTH_TILES: u16 = 32;
-const FRAME_WIDTH_PX: u16 = WIDTH_TILES * TILE_WIDTH_PX;
 const FRAME_HEIGHT_TILES: u16 = 30;
 const FRAME_HEIGHT_PX: u16 = 256;
+const FRAME_WIDTH_PX: u16 = FRAME_WIDTH_TILES * TILE_WIDTH_PX;
 const FRAME_SIZE_BYTES: usize =
     PX_SIZE_BYTES * (FRAME_HEIGHT_PX as usize) * (FRAME_WIDTH_PX as usize);
 
@@ -94,7 +95,7 @@ pub struct PPU {
     palette_table: [u8; 32],
     renderer: Box<dyn Renderer>,
     // Sprites
-    oam_primary: [Sprite; 64],
+    oam_primary: [u8; 256], // Reinterpreted as sprites
     oam_secondary: [Sprite; 8],
     //sprite_pattern_table: [u16; 8],
     //sprite_attrs: [u8; 8],
@@ -154,7 +155,7 @@ impl PPU {
             registers: Registers::default(),
             flags: Flags::default(),
             renderer,
-            oam_primary: [Sprite::default(); 64],
+            oam_primary: [0; 256],
             oam_secondary: [Sprite::default(); 8],
             palette_table: [0; 32],
             cycle: 0,
@@ -201,8 +202,12 @@ impl PPU {
     pub fn oam_dma(&mut self, data: &[u8]) {
         assert_eq!(data.len(), 256, "Data should be 1 full page");
 
-        for (i, chunk) in data.chunks(Sprite::BYTES_PER).enumerate() {
-            self.oam_primary[i] = Sprite::from(chunk);
+        unsafe {
+            std::ptr::copy_nonoverlapping(
+                data.as_ptr(),
+                self.oam_primary.as_mut_ptr(),
+                self.oam_primary.len(),
+            );
         }
     }
 
@@ -268,11 +273,11 @@ impl PPU {
 
     fn show_clipped_lhs(&self) -> bool {
         self.registers.mask & (PpuMask::SHOW_LEFT_BG | PpuMask::SHOW_LEFT_SPRITES) != 0
-            && self.oam_primary[0].x() <= 7
+            && self.oam_secondary[0].x() <= 7
     }
 
     fn sprite0_past_rhs(&self) -> bool {
-        self.oam_primary[0].x() == 255
+        self.oam_secondary[0].x() == 255
     }
 
     fn sprites_enabled(&self) -> bool {
@@ -283,11 +288,14 @@ impl PPU {
         self.registers.status & PpuStatus::SPRITE_0_HIT != 0
     }
 
-    fn is_sprite0_hit(&self) -> bool {
-        self.sprites_enabled()
+    fn update_sprite0_hit(&mut self) {
+        if self.sprites_enabled()
             && self.show_clipped_lhs()
             && !self.sprite0_past_rhs()
             && !self.has_sprite0_hit()
+        {
+            self.registers.status |= PpuStatus::SPRITE_0_HIT;
+        }
     }
 
     fn rendering_enabled(&self) -> bool {
@@ -310,11 +318,12 @@ impl PPU {
         self.registers.status &= !PpuStatus::VBLANK_STARTED;
         self.registers.scroll.update_y_latch();
         self.flags.odd = !self.flags.odd;
+        self.oam_secondary = [Sprite::default(); 8];
         event!(Level::INFO, "end frame {:#02X}", self.registers.status);
 
         // FIXME: This should be done on a line basis in do_visible_scanline
-        self.render_frame();
-        // self.show_pattern_table();
+        // self.render_frame();
+        self.show_pattern_table();
     }
 
     #[tracing::instrument(target = "ppu", skip(self))]
@@ -422,20 +431,56 @@ impl PPU {
     ///
     /// https://www.nesdev.org/wiki/PPU_sprite_evaluation
     fn do_visible_scanline(&mut self) {
-        let mut sprites_to_draw: Vec<Sprite> = Vec::new();
-
         // The value of OAMADDR when sprite evaluation starts at tick 65 of the visible scanlines
         // will determine where in OAM sprite evaluation starts, and hence which sprite gets
         // treated as sprite 0. The first OAM entry to be checked during sprite evaluation is the
-        // one starting at OAM[OAMADDR]. If OAMADDR is unaligned and does not point to the y
+        // one starting at OAM[OAMADDR].
+
+        let sprite_width = sprite::Sprite::pix_width(self.registers.ctrl & PpuCtrl::SPRITE_SIZE);
+
+        let mut sprite_idx = 0;
+
+        let mut m = 0;
+        for n in (0..256).step_by(4) {
+            if sprite_idx == 8 {
+                // HW bug -- once we have exactly 8 sprites this starts being incremented along
+                // with n
+                m = (m + 1) & 0x3;
+            }
+
+            let addr = (self.registers.oamaddr as usize + n + m) & 0xFF;
+            let sprite = Sprite::from(&self.oam_primary[addr..(addr + 4)]);
+
+            if !sprite.in_scanline(self.scanline) {
+                // Not visible -- we don't care
+                continue;
+            }
+
+            if sprite_idx == 8 {
+                // Too many sprites found (9) when we can only have 8. Set the sprite overflow flag
+                // and bail
+                self.registers.status |= PpuStatus::SPRITE_OVERFLOW;
+                event!(Level::DEBUG, "Sprite overflow");
+                break;
+            }
+
+            self.oam_secondary[sprite_idx] = sprite;
+            sprite_idx += 1;
+        }
+        event!(
+            Level::DEBUG,
+            "{} sprites on scanline {}",
+            sprite_idx,
+            self.scanline
+        );
+
+        // If OAMADDR is unaligned and does not point to the y
         // position (first byte) of an OAM entry, then whatever it points to (tile index,
         // attribute, or x coordinate) will be reinterpreted as a y position, and the following
-        // bytes will be similarly reinterpreted. No more sprites will be found once the end of OAM
-        // is reached, effectively hiding any sprites before OAM[OAMADDR].
+        // bytes will be similarly reinterpreted.
 
-        if self.is_sprite0_hit() {
-            self.registers.status |= PpuStatus::SPRITE_0_HIT;
-        }
+        // No more sprites will be found once the end of OAM
+        // is reached, effectively hiding any sprites before OAM[OAMADDR].
 
         self.write_scanline();
     }
@@ -454,8 +499,14 @@ impl PPU {
         );
 
         if !self.rendering_enabled() {
+            event!(Level::DEBUG, "Rendering disabled");
             return;
         }
+
+        // Sprite evaluation does not cause a hit -- only rendering
+        //
+        // https://www.nesdev.org/wiki/PPU_sprite_evaluation
+        self.update_sprite0_hit();
 
         for tile in 0..(FRAME_WIDTH_TILES as usize) {
             let nametable_addr: u16 = self.nametable_base() | self.registers.addr.to_u16();
@@ -471,13 +522,61 @@ impl PPU {
             let pattern_hi = self.pattern_table_read(pat_table_addr + HIGH_OFFSET_BYTES);
             let color_idx = tile_lohi_to_idx(pattern_lo, pattern_hi);
 
-            for (px, color) in color_idx.iter().enumerate() {
+            for (px, &lo_idx) in color_idx.iter().enumerate() {
+                assert!(lo_idx < 4);
+
                 let buf_addr = PX_SIZE_BYTES
-                    * (((self.scanline as usize) * (WIDTH_TILES as usize) + tile)
+                    * (((self.scanline as usize) * (FRAME_WIDTH_TILES as usize) + tile)
                         * TILE_WIDTH_PX as usize
                         + px as usize);
 
-                let idx = (d4 << 4) | (d3_d2 << 2) | color;
+                let idx = (d4 << 4) | (d3_d2 << 2) | lo_idx;
+
+                let color = PALETTE_TABLE[idx as usize];
+                event!(Level::DEBUG, "writing address {:#X}", buf_addr);
+                self.frame_buf[buf_addr..(buf_addr + PX_SIZE_BYTES)]
+                    .swap_with_slice(&mut to_u8_slice(color));
+            }
+        }
+
+        // Render sprites
+        //
+        //   NOTE: To handle overlapping, the sprite data that occurs first will overlap any other
+        //   sprites after it. Therefore we iterate through the list of sprites to render in
+        //   reverse.
+        for (i, sprite) in self
+            .oam_secondary
+            .iter()
+            .rev()
+            .filter(|s| s.is_valid())
+            .enumerate()
+        {
+            event!(
+                Level::INFO,
+                "scanline {}> Rendering sprite {}",
+                self.scanline,
+                i
+            );
+            let nametable_addr: u16 = self.nametable_base() | self.registers.addr.to_u16();
+            let pat_table_addr = self.sprite_table_base() | sprite.tile_num() as u16;
+
+            let d4 = 0_u8; // Rendering background
+            let d3_d2 = self.read_attr_table(nametable_addr);
+
+            const HIGH_OFFSET_BYTES: u16 = 8; // The next bitplane for this tile
+            let pattern_lo = self.pattern_table_read(pat_table_addr);
+            let pattern_hi = self.pattern_table_read(pat_table_addr + HIGH_OFFSET_BYTES);
+            let color_idx = tile_lohi_to_idx(pattern_lo, pattern_hi);
+            for (px, &lo_idx) in color_idx.iter().enumerate() {
+                assert!(lo_idx < 4);
+
+                let buf_addr = PX_SIZE_BYTES
+                    * (((self.scanline as usize) * (FRAME_WIDTH_TILES as usize)
+                        + sprite.x() as usize)
+                        * TILE_WIDTH_PX as usize
+                        + px as usize);
+
+                let idx = (d4 << 4) | (d3_d2 << 2) | lo_idx;
 
                 let color = PALETTE_TABLE[idx as usize];
                 event!(Level::DEBUG, "writing address {:#X}", buf_addr);
@@ -496,7 +595,7 @@ impl PPU {
     }
 
     fn show_pattern_table(&mut self) {
-        let mut buf = vec![0_u8; FRAME_SIZE_BYTES];
+        let mut buf = vec![0_u8; FRAME_SIZE_BYTES / 2];
 
         let read_tile_lohi = |addr: u16| -> (u8, u8) {
             const HIGH_OFFSET_BYTES: u16 = 8;
@@ -512,42 +611,57 @@ impl PPU {
         // Concretely, the first row of the SDL texture contains the first row of 16 tiles, which
         // are actually offset 16 bytes from each other. Display the tiles side-by-side so we have
         // the traditional left and right halves
-        for row in 0..FRAME_HEIGHT_PX {
-            let tile_num_down = row / TILE_HEIGHT_PX;
-            let row_offset = row % TILE_HEIGHT_PX;
 
-            for col in 0..WIDTH_TILES {
-                let chr_addr = row_offset
-                    + (col * TILE_SIZE_BYTES)
-                    + (tile_num_down * TILE_SIZE_BYTES * WIDTH_TILES);
+        // There are 16 x 32 tiles
+        const NUM_TILES_VERT: u16 = 16;
+        let mut used_addrs = [false; 0x2000];
+        for row in 0..NUM_TILES_VERT * TILE_HEIGHT_PX {
+            let (tile_y, tile_row) = (row / TILE_HEIGHT_PX, row % TILE_HEIGHT_PX);
+
+            for tile_x in 0..FRAME_WIDTH_TILES {
+                let tile_num = tile_y * FRAME_WIDTH_TILES + tile_x;
+                let chr_addr = tile_row + tile_num * TILE_SIZE_BYTES;
+
+                assert_eq!(used_addrs[chr_addr as usize], false);
+                used_addrs[chr_addr as usize] = true;
+                used_addrs[chr_addr as usize + 8] = true;
 
                 let (low_byte, high_byte) = read_tile_lohi(chr_addr);
                 let color_idx = tile_lohi_to_idx(low_byte, high_byte);
 
                 for px in 0..TILE_WIDTH_PX {
-                    const COLORS: [u8; 4] = [0, 85, 170, 255];
+                    const COLORS: [u8; 4] = [1, 85, 170, 255];
                     let color = COLORS[color_idx[px as usize] as usize];
                     let buf_addr = PX_SIZE_BYTES
-                        * (px as usize + ((row * WIDTH_TILES + col) * TILE_WIDTH_PX) as usize);
+                        * (px as usize
+                            + (row * FRAME_WIDTH_TILES + tile_x) as usize * TILE_WIDTH_PX as usize);
 
                     // Assign all pixels as the same color value so we get a grayscale version
+                    assert_eq!(
+                        buf[buf_addr..(buf_addr + PX_SIZE_BYTES)],
+                        [0; PX_SIZE_BYTES]
+                    );
                     buf[buf_addr..(buf_addr + PX_SIZE_BYTES)]
                         .swap_with_slice(&mut [color; PX_SIZE_BYTES]);
                 }
             }
         }
+        for (addr, used) in used_addrs.iter().enumerate() {
+            assert!(used, "Unused address {:#X}", addr);
+        }
 
         // Format pattern table s.t. 0x000-0x0FFF are on the left and 0x1000-0x1FFF are on the
         // right
-        const HALF: usize = FRAME_SIZE_BYTES / 2;
-        let pattern_table = buf[0..HALF]
-            .chunks(FRAME_WIDTH_PX as usize * PX_SIZE_BYTES)
-            .zip(buf[HALF..].chunks(FRAME_WIDTH_PX as usize * PX_SIZE_BYTES))
+        let half_frame: usize = buf.len() / 2;
+        const HALF_TILES: usize = TILE_HEIGHT_PX as usize * FRAME_WIDTH_PX as usize * PX_SIZE_BYTES;
+        let pattern_table = buf[..half_frame]
+            .chunks(HALF_TILES)
+            .zip(buf[half_frame..].chunks(HALF_TILES))
             .flat_map(|(l, r)| [l, r].concat())
             .collect::<Vec<_>>();
         assert_eq!(pattern_table.len(), buf.len());
 
-        const TEX_WIDTH_PX: u32 = 2 * (WIDTH_TILES * TILE_WIDTH_PX) as u32;
+        const TEX_WIDTH_PX: u32 = FRAME_WIDTH_PX as u32;
         const TEX_HEIGHT_PX: u32 = FRAME_HEIGHT_PX as u32 / 2;
         self.renderer
             .render_frame(&pattern_table, TEX_WIDTH_PX, TEX_HEIGHT_PX);

@@ -107,15 +107,18 @@ impl Bus for NesBus {
             0x4014 => {
                 // FIXME: Could make this a direct access from the page and not a bunch of bus reads
                 const PAGE_SIZE: u16 = 256;
+
+                // Writing $XX will upload 256 bytes of data from CPU page $XX00-$XXFF to the
+                // internal PPU OAM. This page is typically located in internal RAM, commonly
+                // $0200-$02FF, but cartridge RAM or ROM can be used as well.
+                //
+                // https://www.nesdev.org/wiki/PPU_registers#OAMDATA
                 let dma_buffer = (0..PAGE_SIZE)
                     .map(|lo| self.read((val as u16) << 8 | lo))
                     .collect::<Vec<_>>();
                 self.ppu.oam_dma(dma_buffer.as_slice());
             }
-            _ => panic!(
-                "Tried to write 0x{:X} to read-only address 0x{:X}",
-                val, addr
-            ),
+            _ => unreachable!(),
         }
     }
 

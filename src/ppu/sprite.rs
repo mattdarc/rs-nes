@@ -5,12 +5,6 @@ pub enum Priority {
 }
 
 #[derive(Clone, Copy)]
-pub enum Size {
-    Large,
-    Small,
-}
-
-#[derive(Clone, Copy)]
 pub struct Sprite {
     x: u8,
     y: u8,
@@ -26,21 +20,32 @@ pub struct Sprite {
 
 impl Sprite {
     pub const BYTES_PER: usize = 4;
+    pub const PIX_HEIGHT: u8 = 8;
 
     pub fn default() -> Self {
-        Sprite::from([0_u8; 4].as_slice())
+        // Reading from an uninitialized OAM secondary will return 0xFF
+        Sprite::from([0xFF_u8; Sprite::BYTES_PER].as_slice())
     }
 
-    pub fn size(size: Size) -> i32 {
-        match size {
-            Size::Large => 16,
-            Size::Small => 8,
+    pub fn in_scanline(&self, line: i16) -> bool {
+        self.y as i16 <= line && line < (self.y + Sprite::PIX_HEIGHT) as i16
+    }
+
+    pub fn pix_width(sprite_size: u8) -> u8 {
+        match sprite_size {
+            0 => 8,
+            1 => 16,
+            _ => unreachable!(),
         }
     }
 
     pub fn raw(&self) -> &[u8] {
         assert!(self.bytes.len() == 4, "Sprites should be 4 bytes in size!");
         self.bytes.as_slice()
+    }
+
+    pub fn is_valid(&self) -> bool {
+        self.bytes != [0xFF; 4]
     }
 
     pub fn x(&self) -> i32 {
@@ -84,7 +89,7 @@ impl std::convert::From<&[u8]> for Sprite {
         let bank_sel = if bytes[1] & 0x1 != 0 { 0x1000 } else { 0x0000 };
         let tile_num = bytes[1] & 0xFE;
 
-        // this is 4-7 but I am using it like an index into the palette table
+        // This is 4-7 but I am using it like an index into the palette table
         let palette_num = (bytes[2] & 0x3) << 2;
 
         let priority = if bytes[2] & 0x20 != 0 {
