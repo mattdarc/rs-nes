@@ -49,7 +49,7 @@ mod flags;
 mod registers;
 mod sprite;
 
-use crate::cartridge::header::Mirroring;
+use crate::cartridge::header::{Header, Mirroring};
 use crate::cartridge::{Cartridge, CartridgeInterface};
 use crate::graphics::Renderer;
 use crate::memory::RAM;
@@ -88,12 +88,17 @@ const PALETTE_TABLE: [u32; 64] = [
 
 pub struct PPU {
     frame_buf: [u8; FRAME_SIZE_BYTES],
-    game: Cartridge,
+    cartridge: Cartridge,
+
+    // Cache the header in the PPU so we don't need to keep dispatching to the shared cartridge.
+    // The header will not change for the lifetime of the game
+    cartridge_header: Header,
     registers: Registers,
     flags: Flags,
     vram: RAM,
     palette_table: [u8; 32],
     renderer: Box<dyn Renderer>,
+
     // Sprites
     oam_primary: [u8; 256], // Reinterpreted as sprites
     oam_secondary: [Sprite; 8],
@@ -106,6 +111,7 @@ pub struct PPU {
     //palette_attr_regs: [u16; 2],
     cycle: i16,
     scanline: i16,
+    frame: usize,
 }
 
 fn to_u8_slice(x: u32) -> [u8; 4] {
@@ -148,10 +154,12 @@ fn tile_lohi_to_idx(low: u8, high: u8) -> [u8; 8] {
 
 const NAMETABLE_START: u16 = 0x2F00;
 impl PPU {
-    pub fn new(game: Cartridge, renderer: Box<dyn Renderer>) -> Self {
+    pub fn new(cartridge: Cartridge, renderer: Box<dyn Renderer>) -> Self {
+        let cartridge_header = cartridge.header();
         PPU {
             frame_buf: [0_u8; FRAME_SIZE_BYTES],
-            game,
+            cartridge,
+            cartridge_header,
             registers: Registers::default(),
             flags: Flags::default(),
             renderer,
@@ -160,6 +168,7 @@ impl PPU {
             palette_table: [0; 32],
             cycle: 0,
             scanline: -1,
+            frame: 0,
             vram: RAM::with_size(0x3000),
         }
     }
@@ -201,14 +210,7 @@ impl PPU {
 
     pub fn oam_dma(&mut self, data: &[u8]) {
         assert_eq!(data.len(), 256, "Data should be 1 full page");
-
-        unsafe {
-            std::ptr::copy_nonoverlapping(
-                data.as_ptr(),
-                self.oam_primary.as_mut_ptr(),
-                self.oam_primary.len(),
-            );
-        }
+        self.oam_primary.as_mut_slice().copy_from_slice(data);
     }
 
     pub fn register_write(&mut self, addr: u16, val: u8) {
@@ -249,12 +251,12 @@ impl PPU {
 
     fn vram_read(&self, addr: u16) -> u8 {
         self.vram
-            .read(mirror(self.game.header().get_mirroring(), addr))
+            .read(mirror(self.cartridge_header.get_mirroring(), addr))
     }
 
     fn vram_write(&mut self, addr: u16, val: u8) {
         self.vram
-            .write(mirror(self.game.header().get_mirroring(), addr), val)
+            .write(mirror(self.cartridge_header.get_mirroring(), addr), val)
     }
 
     fn ppu_addr_next(&mut self) {
@@ -268,7 +270,7 @@ impl PPU {
 
     fn pattern_table_read(&self, addr: u16) -> u8 {
         assert!(addr < 0x1FFF);
-        self.game.chr_read(addr)
+        self.cartridge.chr_read(addr)
     }
 
     fn show_clipped_lhs(&self) -> bool {
@@ -312,6 +314,14 @@ impl PPU {
     }
 
     fn do_end_frame(&mut self) {
+        event!(
+            Level::INFO,
+            "frame {}> End PPUSTATUS = {:#02X}",
+            self.frame,
+            self.registers.status
+        );
+
+        self.frame += 1;
         self.scanline = 0;
         self.flags.has_nmi = false;
         self.registers.status &= !PpuStatus::SPRITE_0_HIT;
@@ -319,7 +329,6 @@ impl PPU {
         self.registers.scroll.update_y_latch();
         self.flags.odd = !self.flags.odd;
         self.oam_secondary = [Sprite::default(); 8];
-        event!(Level::INFO, "end frame {:#02X}", self.registers.status);
 
         // FIXME: This should be done on a line basis in do_visible_scanline
         self.render_frame();
@@ -438,13 +447,13 @@ impl PPU {
 
         let sprite_width = sprite::Sprite::pix_width(self.registers.ctrl & PpuCtrl::SPRITE_SIZE);
 
-        let mut sprite_idx = 0;
-        let mut m = 0;
+        let mut num_sprites = 0;
 
-        // No more sprites will be found once the end of OAM
-        // is reached, effectively hiding any sprites before OAM[OAMADDR].
+        // No more sprites will be found once the end of OAM is reached, effectively hiding any
+        // sprites before OAM[OAMADDR].
+        let mut m = 0;
         for n in (self.registers.oamaddr as usize..256_usize).step_by(4) {
-            if sprite_idx == 8 {
+            if num_sprites == 8 {
                 // HW bug -- once we have exactly 8 sprites this starts being incremented along
                 // with n
                 m = (m + 1) & 0x3;
@@ -462,7 +471,7 @@ impl PPU {
                 continue;
             }
 
-            if sprite_idx == 8 {
+            if num_sprites == 8 {
                 // Too many sprites found (9) when we can only have 8. Set the sprite overflow flag
                 // and bail
                 self.registers.status |= PpuStatus::SPRITE_OVERFLOW;
@@ -470,17 +479,17 @@ impl PPU {
                 break;
             }
 
-            self.oam_secondary[sprite_idx] = sprite;
-            sprite_idx += 1;
+            self.oam_secondary[num_sprites] = sprite;
+            num_sprites += 1;
         }
         event!(
             Level::DEBUG,
-            "{} sprites on scanline {}",
-            sprite_idx,
-            self.scanline
+            "scanline {}> found {} sprites",
+            self.scanline,
+            num_sprites,
         );
 
-        self.write_scanline();
+        self.write_scanline(num_sprites);
     }
 
     /// Renders a tile at a time, since that's what data we get intially. There are four reads
@@ -489,12 +498,13 @@ impl PPU {
     ///  2. Attribute table byte
     ///  3. Palette table tile low
     ///  4. Palette table tile high (+8 bytes)
-    fn write_scanline(&mut self) {
+    fn write_scanline(&mut self, num_sprites: usize) {
         assert!(
             self.scanline < VISIBLE_SCANLINES,
             "Should not render during non-visible scanline {}",
             self.scanline
         );
+        assert!(num_sprites < 9, "We can only draw 8 sprites");
 
         if !self.rendering_enabled() {
             event!(Level::DEBUG, "Rendering disabled");
@@ -533,7 +543,7 @@ impl PPU {
                 let color = PALETTE_TABLE[idx as usize];
                 event!(Level::DEBUG, "writing address {:#X}", buf_addr);
                 self.frame_buf[buf_addr..(buf_addr + PX_SIZE_BYTES)]
-                    .swap_with_slice(&mut to_u8_slice(color));
+                    .copy_from_slice(&to_u8_slice(color));
             }
         }
 
@@ -542,19 +552,14 @@ impl PPU {
         //   NOTE: To handle overlapping, the sprite data that occurs first will overlap any other
         //   sprites after it. Therefore we iterate through the list of sprites to render in
         //   reverse.
-        for (i, sprite) in self
-            .oam_secondary
-            .iter()
-            .rev()
-            .filter(|s| s.is_valid())
-            .enumerate()
-        {
+        for (i, sprite) in self.oam_secondary[..num_sprites].iter().rev().enumerate() {
             event!(
-                Level::INFO,
+                Level::DEBUG,
                 "scanline {}> Rendering sprite {}",
                 self.scanline,
                 i
             );
+
             let nametable_addr: u16 = self.nametable_base() | self.registers.addr.to_u16();
             let pat_table_addr = self.sprite_table_base() | sprite.tile_num() as u16;
 
@@ -598,8 +603,8 @@ impl PPU {
         let read_tile_lohi = |addr: u16| -> (u8, u8) {
             const HIGH_OFFSET_BYTES: u16 = 8;
             (
-                self.game.chr_read(addr),
-                self.game.chr_read(addr + HIGH_OFFSET_BYTES),
+                self.cartridge.chr_read(addr),
+                self.cartridge.chr_read(addr + HIGH_OFFSET_BYTES),
             )
         };
 

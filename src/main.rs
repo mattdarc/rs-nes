@@ -1,10 +1,10 @@
 use tracing::Level;
-use tracing_subscriber::{filter::LevelFilter, fmt, prelude::*, Layer};
+use tracing_subscriber::{fmt, prelude::*, Layer};
 use venus::VNES;
 
 const DEBUG_COMPONENT: &'static str = "ppu";
 
-fn main() -> Result<(), String> {
+fn init_tracing() {
     let mut layers = Vec::new();
 
     // Configure a custom event formatter
@@ -27,6 +27,10 @@ fn main() -> Result<(), String> {
     // Create a `fmt` subscriber that uses our custom event format, and set it
     // as the default.
     tracing_subscriber::registry().with(layers).init();
+}
+
+fn main() -> Result<(), String> {
+    init_tracing();
 
     let mut vnes = VNES::new("donkey-kong.nes").unwrap();
     vnes.reset();

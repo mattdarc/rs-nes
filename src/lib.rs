@@ -54,7 +54,12 @@ impl VNES {
     }
 
     pub fn state(&self) -> &cpu::CpuState {
-        self.cpu.state()
+        if cfg!(test) {
+            #[cfg(test)]
+            return self.cpu.state();
+        }
+
+        unreachable!()
     }
 
     pub fn reset_override(&mut self, pc: u16) {
@@ -70,16 +75,12 @@ impl VNES {
     }
 
     pub fn run_until(&mut self, pc: u16) -> ExitStatus {
-        use std::time::Duration;
-
         // FIXME: Set a SW breakpoint in the CPU instead of doing this
         while self.cpu.pc() < pc {
             match self.run_once() {
                 ExitStatus::Continue => {}
                 status => return status,
             }
-            // FIXME: The CPU probably should not be throttled like this
-            ::std::thread::sleep(Duration::new(0, graphics::constants::FRAME_RATE_NS));
         }
 
         ExitStatus::Breakpoint(self.cpu.pc())
@@ -97,7 +98,7 @@ impl VNES {
                     keycode: Some(Keycode::Escape),
                     ..
                 } => return,
-                _ => {}
+                _ => {} // FIXME: Perhaps this should be recorded somewhere
             }
         }
     }
@@ -109,19 +110,23 @@ impl VNES {
         let stop_requested = AtomicBool::new(false);
         let event_pump = SDL2Intrf::context().event_pump().unwrap();
         scope(|scope| {
-            let cpu_thread = scope.spawn(|_| {
-                while !stop_requested.load(std::sync::atomic::Ordering::Relaxed) {
-                    match self.run_once() {
+            let cpu_thread = scope
+                .builder()
+                .name("cpu-thread".to_owned())
+                .spawn(|_| {
+                    while !stop_requested.load(std::sync::atomic::Ordering::Relaxed) {
+                        match self.run_once() {
                         ExitStatus::Continue => {}
                         ExitStatus::ExitError(e) => return Err(e),
-                        ExitStatus::Breakpoint(_)
+                        ExitStatus::Breakpoint(_) // FIXME: Need to figure out the proper way to handle breakpoints
                         | ExitStatus::ExitSuccess
                         | ExitStatus::ExitInterrupt => return Ok(()),
                     }
-                }
+                    }
 
-                Ok(())
-            });
+                    Ok(())
+                })
+                .unwrap();
 
             VNES::wait_for_interrupt(event_pump);
             stop_requested.store(true, std::sync::atomic::Ordering::Relaxed);

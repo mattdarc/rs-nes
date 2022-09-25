@@ -103,7 +103,7 @@ impl NestestParser {
     }
 }
 
-#[test]
+#[cfg(test)]
 fn nestest() {
     const GOLD_FILE: &str = "test/nestest.log.gold";
     let nestest_state = NestestParser::new(GOLD_FILE).expect("Error parsing gold file");

@@ -144,6 +144,7 @@ impl<BusType: Bus> CPU<BusType> {
         });
     }
 
+    #[cfg(test)]
     pub fn state(&self) -> &CpuState {
         self.old_state
             .as_ref()
@@ -208,25 +209,13 @@ impl<BusType: Bus> CPU<BusType> {
             self.operands[i] = self.bus.read(self.pc + (i as u16) + 1);
         }
 
-        let mut operand_str = String::new();
-        for i in 0..num_operands {
-            operand_str.insert_str(0, &format!("{:02X}", self.operands[i]));
-        }
-        if !operand_str.is_empty() {
-            operand_str.insert_str(0, "0x");
-        }
+        event!(Level::INFO, "{:#04X}> {:?}", self.pc, &self.instruction);
 
-        event!(
-            Level::INFO,
-            "{:#04X}> {:?} {}",
-            self.pc,
-            &self.instruction,
-            operand_str,
-        );
+        #[cfg(test)]
+        self.save_cpu_state();
 
         // FIXME: incrementing the pc should go at the end. All this should go into a post_execute
         // function
-        self.save_cpu_state();
         self.pc += self.instruction.size();
 
         match self.instruction.name() {
