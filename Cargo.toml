@@ -24,7 +24,7 @@ path = "src/tests/ppu_tests.rs"
 # See more keys and their definitions at https://doc.rust-lang.org/cargo/reference/manifest.html
 
 [dependencies]
-sdl2 = "0.32"
+sdl2 = "0.35"
 bitflags = "1.2"
 tracing = "0.1"
 tracing-subscriber = "0.3"
