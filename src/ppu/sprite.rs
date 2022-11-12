@@ -27,11 +27,11 @@ impl Sprite {
         Sprite::from([0xFF_u8; Sprite::BYTES_PER].as_slice())
     }
 
-    pub fn in_scanline(&self, line: i16) -> bool {
-        self.y as i16 <= line && line < (self.y + Sprite::PIX_HEIGHT) as i16
+    pub fn in_scanline(&self, line: i16, height: u8) -> bool {
+        self.y as i16 <= line && line < (self.y + height) as i16
     }
 
-    pub fn pix_width(sprite_size: u8) -> u8 {
+    pub fn pix_height(sprite_size: u8) -> u8 {
         match sprite_size {
             0 => 8,
             1 => 16,
@@ -87,7 +87,7 @@ impl std::convert::From<&[u8]> for Sprite {
         let x = bytes[3];
         let y = bytes[0];
         let bank_sel = if bytes[1] & 0x1 != 0 { 0x1000 } else { 0x0000 };
-        let tile_num = bytes[1] & 0xFE;
+        let tile_num = bytes[1];
 
         // This is 4-7 but I am using it like an index into the palette table
         let palette_num = (bytes[2] & 0x3) << 2;

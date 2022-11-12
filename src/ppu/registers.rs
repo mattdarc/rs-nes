@@ -4,7 +4,7 @@ pub struct PpuCtrl;
 impl PpuCtrl {
     pub const NMI_ENABLE: u8 = 0x80;
     pub const SLAVE_SELECT: u8 = 0x40;
-    pub const SPRITE_SIZE: u8 = 0x20;
+    pub const SPRITE_HEIGHT: u8 = 0x20;
     pub const BG_TABLE_ADDR: u8 = 0x10;
     pub const SPRITE_TABLE_ADDR: u8 = 0x08;
     pub const VRAM_INCR: u8 = 0x04;

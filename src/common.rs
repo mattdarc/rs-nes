@@ -38,18 +38,6 @@ pub trait Snapshot {
     fn restore(&mut self, medium: Self::Medium) -> bool;
 }
 
-// Memory trait that defines a segment of readable memory
-pub trait Readable {
-    // Read from a segment of memory
-    fn read(&self, idx: usize) -> u8;
-}
-
-// Memory trait that defines a segment of writeable memory
-pub trait Writeable {
-    // Write to a segment of memory
-    fn write(&mut self, idx: usize, val: u8);
-}
-
 #[macro_export]
 macro_rules! ternary {
     ($cond:expr; $a:expr, $b:expr) => {

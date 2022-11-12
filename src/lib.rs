@@ -105,23 +105,37 @@ impl VNES {
 
     pub fn play(&mut self) -> Result<(), String> {
         use graphics::sdl2::SDL2Intrf;
-        use std::sync::atomic::AtomicBool;
+        use std::panic;
+        use std::sync::{atomic::AtomicBool, Arc};
 
-        let stop_requested = AtomicBool::new(false);
+        let stop_request_recv = Arc::new(AtomicBool::new(false));
         let event_pump = SDL2Intrf::context().event_pump().unwrap();
+
         scope(|scope| {
+            let stop_request_send = stop_request_recv.clone();
+
+            // take_hook() returns the default hook in case when a custom one is not set
+            let orig_hook = panic::take_hook();
+            panic::set_hook(Box::new(move |panic_info| {
+                // invoke the default handler and exit the process
+                orig_hook(panic_info);
+                std::process::exit(1);
+            }));
+
             let cpu_thread = scope
                 .builder()
                 .name("cpu-thread".to_owned())
                 .spawn(|_| {
-                    while !stop_requested.load(std::sync::atomic::Ordering::Relaxed) {
+                    while !stop_request_recv.load(std::sync::atomic::Ordering::Acquire) {
                         match self.run_once() {
-                        ExitStatus::Continue => {}
-                        ExitStatus::ExitError(e) => return Err(e),
-                        ExitStatus::Breakpoint(_) // FIXME: Need to figure out the proper way to handle breakpoints
-                        | ExitStatus::ExitSuccess
-                        | ExitStatus::ExitInterrupt => return Ok(()),
-                    }
+                            ExitStatus::Continue => {}
+                            ExitStatus::ExitError(e) => return Err(e),
+
+                            // FIXME: Need to figure out the proper way to handle breakpoints
+                            ExitStatus::Breakpoint(_)
+                            | ExitStatus::ExitSuccess
+                            | ExitStatus::ExitInterrupt => return Ok(()),
+                        }
                     }
 
                     Ok(())
@@ -129,7 +143,8 @@ impl VNES {
                 .unwrap();
 
             VNES::wait_for_interrupt(event_pump);
-            stop_requested.store(true, std::sync::atomic::Ordering::Relaxed);
+
+            stop_request_send.store(true, std::sync::atomic::Ordering::Release);
             cpu_thread.join().unwrap()
         })
         .unwrap()

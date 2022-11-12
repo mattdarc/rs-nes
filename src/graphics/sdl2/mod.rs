@@ -5,8 +5,8 @@ use super::constants::*;
 use super::Renderer;
 use sdl2::pixels::PixelFormatEnum;
 use sdl2::rect::Rect;
-use sdl2::render::{TextureAccess, WindowCanvas};
-use sdl2::video::DisplayMode;
+use sdl2::render::{TextureAccess, TextureCreator, WindowCanvas};
+use sdl2::video::{DisplayMode, WindowContext};
 use std::mem::MaybeUninit;
 use std::slice::from_raw_parts;
 use std::sync::Once;
@@ -37,18 +37,22 @@ impl SDL2Intrf {
 }
 
 pub struct SDLRenderer {
-    canvas: Option<WindowCanvas>,
+    canvas: WindowCanvas,
+    tex_creator: TextureCreator<WindowContext>,
 }
 
 impl SDLRenderer {
     pub fn new() -> Self {
-        let mut renderer = SDLRenderer { canvas: None };
-        renderer.get_or_create_canvas();
-        renderer
+        let canvas = SDLRenderer::init_canvas();
+        let tex_creator = canvas.texture_creator();
+        SDLRenderer {
+            canvas,
+            tex_creator,
+        }
     }
 
-    fn get_or_create_canvas(&mut self) -> &mut WindowCanvas {
-        self.canvas.get_or_insert_with(SDLRenderer::init_canvas)
+    fn get_canvas(&mut self) -> &mut WindowCanvas {
+        &mut self.canvas
     }
 
     fn init_canvas() -> WindowCanvas {
@@ -60,7 +64,7 @@ impl SDLRenderer {
             .position_centered()
             .build()
             .unwrap();
-        const REFRESH_RATE_HZ: i32 = 30;
+        const REFRESH_RATE_HZ: i32 = 60;
         window
             .set_display_mode(Some(DisplayMode::new(
                 PixelFormatEnum::RGB888,
@@ -70,7 +74,7 @@ impl SDLRenderer {
             )))
             .unwrap();
 
-        let mut canvas = window.into_canvas().build().unwrap();
+        let mut canvas = window.into_canvas().present_vsync().build().unwrap();
         canvas.clear();
 
         canvas
@@ -81,24 +85,20 @@ impl Renderer for SDLRenderer {
     // TODO: May need to find a way to batch these together, or clear() only
     // when the screen needs to be updated
     fn render_line(&mut self, scanline: &[u8], row: u32) {
-        // TODO: Better way to handle noop rendering
-
         assert_eq!(
             scanline.len() as u32,
             NES_SCREEN_WIDTH,
             "scanline is not the width of the screen!"
         );
 
-        let canvas = self.get_or_create_canvas();
         let line: Vec<_> = scanline
             .iter()
             .map(|c| PALETTE_TABLE[*c as usize])
             .collect();
 
-        let creator = canvas.texture_creator();
-
         // TODO: Should this be created each time or reused??
-        let mut texture = creator
+        let mut texture = self
+            .tex_creator
             .create_texture(None, TextureAccess::Streaming, NES_SCREEN_WIDTH, 1)
             .unwrap();
         texture
@@ -114,23 +114,26 @@ impl Renderer for SDLRenderer {
             WINDOW_WIDTH,
             WINDOW_HEIGHT_MUL,
         );
-        canvas.copy(&texture, None, Some(dst_rect)).unwrap();
-        canvas.present();
+        self.canvas.copy(&texture, None, Some(dst_rect)).unwrap();
+        self.canvas.present();
     }
 
     /// Display a buffer buf on the screen. The format of the buffer is assumed to be in the RGB888
     /// format
     fn render_frame(&mut self, buf: &[u8], width: u32, height: u32) {
-        let canvas = self.get_or_create_canvas();
-        let creator = canvas.texture_creator();
-        let mut texture = creator
-            .create_texture(None, TextureAccess::Streaming, width, height)
+        self.canvas
+            .set_draw_color(sdl2::pixels::Color::RGB(0, 0, 0));
+        self.canvas.fill_rect(None);
+
+        let mut texture = self
+            .tex_creator
+            .create_texture_target(None, width, height)
             .unwrap();
 
         let pitch_bytes: usize = PX_SIZE_BYTES as usize * width as usize;
         texture.update(None, &buf, pitch_bytes).unwrap();
-        canvas.copy(&texture, None, None).unwrap();
-        canvas.present();
+        self.canvas.copy(&texture, None, None).unwrap();
+        self.canvas.present();
     }
 }
 

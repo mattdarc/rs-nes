@@ -64,7 +64,7 @@ impl NesBus {
 }
 
 impl Bus for NesBus {
-    #[tracing::instrument(target = "bus", skip(self), ret)]
+    #[tracing::instrument(target = "bus", level = Level::DEBUG, skip(self), ret)]
     fn read(&mut self, addr: u16) -> u8 {
         // FIXME: *Could* make each of these components conform to a common interface which has
         // read/write register, but the NES is fixed HW so I don't see the benefit ATM
@@ -72,19 +72,19 @@ impl Bus for NesBus {
             0x0..=0x1FFF => self.cpu_ram.read(addr),
             0x2000..=0x3FFF => self.ppu.register_read(addr),
             0x4000..=0x4015 => {
-                event!(Level::INFO, "read from APU");
+                event!(Level::DEBUG, "read from APU");
                 0
             }
             0x4016 => {
-                event!(Level::INFO, "read from controller 1");
+                event!(Level::DEBUG, "read from controller 1");
                 0
             }
             0x4017 => {
-                event!(Level::INFO, "read from controller 2");
+                event!(Level::DEBUG, "read from controller 2");
                 0
             }
             0x4018..=0x401F => {
-                event!(Level::INFO, "read from APU.test");
+                event!(Level::DEBUG, "read from APU.test");
                 0
             }
             0x4020..=0xFFFF => self.game.prg_read(addr),
@@ -92,7 +92,7 @@ impl Bus for NesBus {
         value
     }
 
-    #[tracing::instrument(target = "bus", skip(self))]
+    #[tracing::instrument(target = "bus", level = Level::DEBUG, skip(self))]
     fn write(&mut self, addr: u16, val: u8) {
         self.dump_instr("write", addr, val);
 
@@ -100,8 +100,8 @@ impl Bus for NesBus {
             0x0..=0x1FFF => self.cpu_ram.write(addr % 0x800, val),
             0x4000..0x4014 | 0x4015 => {} // self.apu.write_register(addr - 0x4000, val),
             // NOTE: Controllers can be written to to enable strobe mode
-            0x4016 => event!(Level::INFO, "write to controller 1"),
-            0x4017 => event!(Level::INFO, "write to controller 2"),
+            0x4016 => event!(Level::DEBUG, "write to controller 1"),
+            0x4017 => event!(Level::DEBUG, "write to controller 2"),
             0x4020..=0xFFFF => self.game.prg_write(addr, val),
             0x2000..=0x3FFF => self.ppu.register_write(addr, val),
             0x4014 => {
@@ -116,6 +116,13 @@ impl Bus for NesBus {
                 let dma_buffer = (0..PAGE_SIZE)
                     .map(|lo| self.read((val as u16) << 8 | lo))
                     .collect::<Vec<_>>();
+
+                event!(
+                    Level::INFO,
+                    "CYC:{} OAMDMA from 0x{:04X}",
+                    self.cycles(),
+                    (val as u16) << 8
+                );
                 self.ppu.oam_dma(dma_buffer.as_slice());
             }
             _ => unreachable!(),
