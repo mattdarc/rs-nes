@@ -31,7 +31,7 @@ impl Sprite {
         self.y as i16 <= line && line < (self.y + height) as i16
     }
 
-    pub fn pix_height(sprite_size: u8) -> u8 {
+    pub fn height_px(sprite_size: u8) -> u8 {
         match sprite_size {
             0 => 8,
             1 => 16,

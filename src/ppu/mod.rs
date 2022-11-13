@@ -56,11 +56,13 @@ use crate::memory::RAM;
 use flags::*;
 use registers::*;
 use sprite::Sprite;
+use std::time;
 use tracing::{event, Level};
 
 const SCANLINES_PER_FRAME: i16 = 262;
 const VISIBLE_SCANLINES: i16 = 240;
 const CYCLES_PER_SCANLINE: i16 = 341;
+const CYCLES_PER_TILE: i16 = 8;
 const STARTUP_SCANLINES: i16 = 30_000_i16 / CYCLES_PER_SCANLINE;
 
 const PX_SIZE_BYTES: usize = 4; // 4th byte for the pixel is unused
@@ -102,7 +104,7 @@ pub struct PPU {
 
     // Sprites
     oam_primary: [u8; 256], // Reinterpreted as sprites
-    oam_secondary: [Sprite; 8],
+    oam_secondary: Vec<Sprite>,
     //sprite_pattern_table: [u16; 8],
     //sprite_attrs: [u8; 8],
     //sprite_x_pos: [u16; 8],
@@ -115,6 +117,7 @@ pub struct PPU {
     frame: usize,
 
     fixme_written_addresses: std::collections::HashSet<usize>,
+    timestamp: time::Instant,
 }
 
 fn to_u8_slice(x: u32) -> [u8; 4] {
@@ -167,13 +170,14 @@ impl PPU {
             flags: Flags::default(),
             renderer,
             oam_primary: [0; 256],
-            oam_secondary: [Sprite::default(); 8],
+            oam_secondary: Vec::new(),
             palette_table: [0; 32],
             cycle: 0,
             scanline: -1,
             frame: 0,
             vram: RAM::with_size(0x3000),
             fixme_written_addresses: std::collections::HashSet::new(),
+            timestamp: time::Instant::now(),
         }
     }
 
@@ -279,11 +283,12 @@ impl PPU {
 
     fn show_clipped_lhs(&self) -> bool {
         self.registers.mask & (PpuMask::SHOW_LEFT_BG | PpuMask::SHOW_LEFT_SPRITES) != 0
+            && !self.oam_secondary.is_empty()
             && self.oam_secondary[0].x() <= 7
     }
 
     fn sprite0_past_rhs(&self) -> bool {
-        self.oam_secondary[0].x() == 255
+        !self.oam_secondary.is_empty() && self.oam_secondary[0].x() == 255
     }
 
     fn sprites_enabled(&self) -> bool {
@@ -318,12 +323,11 @@ impl PPU {
     }
 
     fn do_end_frame(&mut self) {
-        event!(
-            Level::INFO,
-            "END FRAME {}> PPUSTATUS = {:#02X}",
-            self.frame,
-            self.registers.status
-        );
+        if self.frame % 30 == 0 {
+            let duration_ms = (time::Instant::now() - self.timestamp).as_millis();
+            event!(Level::INFO, "END FRAME {}> {}ms", self.frame, duration_ms);
+            self.timestamp = time::Instant::now()
+        }
 
         self.frame += 1;
         self.flags.has_nmi = false;
@@ -331,7 +335,7 @@ impl PPU {
         self.registers.status &= !PpuStatus::VBLANK_STARTED;
         self.registers.scroll.update_y_latch();
         self.flags.odd = !self.flags.odd;
-        self.oam_secondary = [Sprite::default(); 8];
+        self.oam_secondary.clear();
         self.fixme_written_addresses.clear();
 
         if self.rendering_enabled() {
@@ -373,8 +377,16 @@ impl PPU {
             }
             1..VISIBLE_SCANLINES => self.do_visible_scanline(),
             VISIBLE_SCANLINES => self.do_start_vblank(),
+            NOP_SCANLINES =>
+            // NOTE: This is normally done during all the non-visible frames, but it should be
+            // fine to do it once at the end...
+            {
+                self.evaluate_sprites()
+            }
             NOP_SCANLINES..SCANLINES_PER_FRAME => {}
-            SCANLINES_PER_FRAME => self.do_end_frame(),
+            SCANLINES_PER_FRAME => {
+                self.do_end_frame();
+            }
             _ => unreachable!(),
         }
 
@@ -449,24 +461,31 @@ impl PPU {
     ///  4. Actually draws the sprites
     ///
     /// https://www.nesdev.org/wiki/PPU_sprite_evaluation
+    ///
+    /// This is called 30 times per scanline, in chunks of 8 pixels at a time (the width of a tile)
     fn do_visible_scanline(&mut self) {
         // The value of OAMADDR when sprite evaluation starts at tick 65 of the visible scanlines
         // will determine where in OAM sprite evaluation starts, and hence which sprite gets
         // treated as sprite 0. The first OAM entry to be checked during sprite evaluation is the
         // one starting at OAM[OAMADDR].
+        self.write_scanline();
+    }
 
+    /// Sprite evaluation. This does not render anything, just updates the internal states of the
+    /// sprites
+    ///
+    /// Returns the number of sprites that must be rendered
+    fn evaluate_sprites(&mut self) {
         event!(Level::DEBUG, "FRAME {}> evaluating sprites", self.frame);
-        let sprite_height =
-            sprite::Sprite::pix_height(self.registers.ctrl & PpuCtrl::SPRITE_HEIGHT);
 
-        let mut num_sprites = 0;
+        let sprite_height = sprite::Sprite::height_px(self.registers.ctrl & PpuCtrl::SPRITE_HEIGHT);
 
         // No more sprites will be found once the end of OAM is reached, effectively hiding any
         // sprites before OAM[OAMADDR].
         let mut m = 0;
         const SPRITE_STRIDE: usize = 4;
         for n in (self.registers.oamaddr as usize..256_usize).step_by(SPRITE_STRIDE) {
-            if num_sprites == 8 {
+            if self.oam_secondary.len() == 8 {
                 // HW bug -- once we have exactly 8 sprites this starts being incremented along
                 // with n
                 m = (m + 1) & 0x3;
@@ -485,7 +504,7 @@ impl PPU {
                 continue;
             }
 
-            if num_sprites == 8 {
+            if self.oam_secondary.len() == 8 {
                 // Too many sprites found (9) when we can only have 8. Set the sprite overflow flag
                 // and bail
                 self.registers.status |= PpuStatus::SPRITE_OVERFLOW;
@@ -493,17 +512,8 @@ impl PPU {
                 break;
             }
 
-            self.oam_secondary[num_sprites] = sprite;
-            num_sprites += 1;
+            self.oam_secondary.push(sprite);
         }
-        event!(
-            Level::DEBUG,
-            "scanline {}> found {} sprites",
-            self.scanline,
-            num_sprites,
-        );
-
-        self.write_scanline(num_sprites);
     }
 
     /// Renders a tile at a time, since that's what data we get intially. There are four reads
@@ -512,13 +522,20 @@ impl PPU {
     ///  2. Attribute table byte
     ///  3. Palette table tile low
     ///  4. Palette table tile high (+8 bytes)
-    fn write_scanline(&mut self, num_sprites: usize) {
+    fn write_scanline(&mut self) {
         assert!(
             0 <= self.scanline && self.scanline < VISIBLE_SCANLINES,
             "Should not render during non-visible scanline {}",
             self.scanline
         );
-        assert!(num_sprites < 9, "We can only draw 8 sprites");
+        assert!(self.oam_secondary.len() < 9, "We can only draw 8 sprites");
+
+        event!(
+            Level::DEBUG,
+            "scanline {}> found {} sprites",
+            self.scanline,
+            self.oam_secondary.len(),
+        );
 
         // FIXME: probably don't need to do the work but this makes things easier to debug
         //
@@ -560,12 +577,16 @@ impl PPU {
 
             let addr = ((tile_y * TILE_HEIGHT_PX as usize + tile_row) * FRAME_WIDTH_PX as usize)
                 + tile_x * TILE_WIDTH_PX as usize;
-            let inserted = self.fixme_written_addresses.insert(addr);
-            assert!(
-                inserted,
-                "scanline={} tile_x={} tile_y={} addr {} used (frame={})",
-                self.scanline, tile_x, tile_y, addr, self.frame
-            );
+
+            #[cfg(debug_assertions)]
+            {
+                let inserted = self.fixme_written_addresses.insert(addr);
+                assert!(
+                    inserted,
+                    "scanline={} tile_x={} tile_y={} addr {} used (frame={})",
+                    self.scanline, tile_x, tile_y, addr, self.frame
+                );
+            }
 
             // 0 is transparent, filter these out
             for (px, &lo) in color_idx.iter().enumerate().filter(|(_, &idx)| idx > 0) {
@@ -580,13 +601,15 @@ impl PPU {
             }
         }
 
+        return;
+
         // Render sprites
         //
         //   NOTE: To handle overlapping, the sprite data that occurs first will overlap any other
         //   sprites after it. Therefore we iterate through the list of sprites to render in
         //   reverse.
         event!(Level::DEBUG, "FRAME {}> rendering sprites", self.frame);
-        for (i, sprite) in self.oam_secondary[..num_sprites].iter().rev().enumerate() {
+        for (i, sprite) in self.oam_secondary.iter().rev().enumerate() {
             event!(
                 Level::DEBUG,
                 "SCANLINE {}> rendering sprite {}",
@@ -595,7 +618,7 @@ impl PPU {
             );
 
             assert!(sprite.y() <= self.scanline as i32);
-            let mut pat_table_addr = if self.registers.ctrl & PpuCtrl::SPRITE_HEIGHT != 0 {
+            let pat_table_addr = if self.registers.ctrl & PpuCtrl::SPRITE_HEIGHT != 0 {
                 // 16 pixel height sprites
                 (sprite.tile_num() as u16 & 1) << 12_u16 | (sprite.tile_num() as u16 & 0xFE)
             } else {
@@ -613,7 +636,7 @@ impl PPU {
             let pattern_hi = self.pattern_table_read(pat_table_addr + HIGH_OFFSET_BYTES);
             let color_idx = tile_lohi_to_idx(pattern_lo, pattern_hi);
 
-            for (px, &lo_idx) in color_idx.iter().enumerate().filter(|(_, &idx)| idx > 0) {
+            for (px, &lo_idx) in color_idx.iter().enumerate() {
                 assert!(lo_idx < 4);
 
                 let buf_addr = PX_SIZE_BYTES
