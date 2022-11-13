@@ -59,22 +59,24 @@ use sprite::Sprite;
 use std::time;
 use tracing::{event, Level};
 
+// FIXME: Need to fix up these types a bit
 const SCANLINES_PER_FRAME: i16 = 262;
 const VISIBLE_SCANLINES: i16 = 240;
 const CYCLES_PER_SCANLINE: i16 = 341;
+const VISIBLE_CYCLES: i16 = 256;
 const CYCLES_PER_TILE: i16 = 8;
-const STARTUP_SCANLINES: i16 = 30_000_i16 / CYCLES_PER_SCANLINE;
+const STARTUP_SCANLINES: i16 = 30_000_i16 / CYCLES_PER_SCANLINE as i16;
 
 const PX_SIZE_BYTES: usize = 4; // 4th byte for the pixel is unused
 
-const TILE_WIDTH_PX: u16 = 8;
-const TILE_HEIGHT_PX: u16 = 8;
-const TILE_SIZE_BYTES: u16 = 16;
+const TILE_WIDTH_PX: i16 = 8;
+const TILE_HEIGHT_PX: i16 = 8;
+const TILE_SIZE_BYTES: i16 = 16;
 
-const FRAME_WIDTH_TILES: u16 = 32;
-const FRAME_HEIGHT_TILES: u16 = 30;
-const FRAME_HEIGHT_PX: u16 = 256;
-const FRAME_WIDTH_PX: u16 = FRAME_WIDTH_TILES * TILE_WIDTH_PX;
+const FRAME_WIDTH_TILES: i16 = 32;
+const FRAME_HEIGHT_TILES: i16 = 30;
+const FRAME_HEIGHT_PX: i16 = 256;
+const FRAME_WIDTH_PX: i16 = FRAME_WIDTH_TILES * TILE_WIDTH_PX;
 const FRAME_SIZE_BYTES: usize =
     PX_SIZE_BYTES * (FRAME_HEIGHT_PX as usize) * (FRAME_WIDTH_PX as usize);
 
@@ -96,25 +98,21 @@ pub struct PPU {
     // Cache the header in the PPU so we don't need to keep dispatching to the shared cartridge.
     // The header will not change for the lifetime of the game
     cartridge_header: Header,
+
     registers: Registers,
     flags: Flags,
     vram: RAM,
-    palette_table: [u8; 32],
     renderer: Box<dyn Renderer>,
 
     // Sprites
     oam_primary: [u8; 256], // Reinterpreted as sprites
     oam_secondary: Vec<Sprite>,
-    //sprite_pattern_table: [u16; 8],
-    //sprite_attrs: [u8; 8],
-    //sprite_x_pos: [u16; 8],
 
     // Background
-    //pattern_table_regs: [u16; 2],
-    //palette_attr_regs: [u16; 2],
     cycle: i16,
     scanline: i16,
     frame: usize,
+    last_tile: i16,
 
     fixme_written_addresses: std::collections::HashSet<usize>,
     timestamp: time::Instant,
@@ -152,7 +150,7 @@ fn mirror(mirror: &Mirroring, addr: u16) -> u16 {
 fn tile_lohi_to_idx(low: u8, high: u8) -> [u8; 8] {
     let mut color_idx = [0_u8; 8];
     for i in 0..color_idx.len() as u8 {
-        color_idx[i as usize] = ((low >> (7 - i)) & 1) + (((high >> (7 - i)) & 1) << 1);
+        color_idx[i as usize] = ((low >> (7 - i)) & 1) | (((high >> (7 - i)) & 1) << 1);
     }
 
     color_idx
@@ -171,10 +169,11 @@ impl PPU {
             renderer,
             oam_primary: [0; 256],
             oam_secondary: Vec::new(),
-            palette_table: [0; 32],
             cycle: 0,
             scanline: -1,
             frame: 0,
+            last_tile: FRAME_WIDTH_TILES,
+
             vram: RAM::with_size(0x3000),
             fixme_written_addresses: std::collections::HashSet::new(),
             timestamp: time::Instant::now(),
@@ -338,11 +337,12 @@ impl PPU {
         self.oam_secondary.clear();
         self.fixme_written_addresses.clear();
 
+        // self.show_pattern_table();
         if self.rendering_enabled() {
             // FIXME: This should be done on a line basis in do_visible_scanline
             self.render_frame();
+            self.clear_render_buffer();
         }
-        // self.show_pattern_table();
 
         std::thread::sleep(std::time::Duration::from_millis(16));
     }
@@ -355,11 +355,12 @@ impl PPU {
 
     #[tracing::instrument(target = "ppu", skip(self))]
     pub fn clock(&mut self, ticks: i16) {
-        self.cycle += ticks;
-        if self.cycle < CYCLES_PER_SCANLINE {
-            return;
+        for _ in 0..ticks {
+            self.tick_once();
         }
+    }
 
+    fn tick_once(&mut self) {
         // FIXME: Do I need to implement this behavior? SW could read this register (apparently
         // Micro Machines does this)
         //
@@ -368,32 +369,50 @@ impl PPU {
         //  * Cycles 257-320: (the sprite tile loading interval) of the pre-render and visible
         //    scanlines. OAMADDR is set to 0 during each of ticks
         const NOP_SCANLINES: i16 = VISIBLE_SCANLINES + 1;
-        match self.scanline {
-            -1 => { /* dummy scanline */ }
-            0 => {
-                self.clear_render_buffer();
-                self.registers.status &= !PpuStatus::VBLANK_STARTED;
-                self.do_visible_scanline();
+        const NOP_CYCLES: i16 = VISIBLE_CYCLES + 1;
+        match (self.scanline, self.cycle) {
+            (-1, _) => { /* dummy scanline */ }
+
+            (0..VISIBLE_SCANLINES, 0..VISIBLE_CYCLES) => {
+                let tile_x = self.cycle / TILE_WIDTH_PX;
+                if tile_x != self.last_tile {
+                    // Render one tile at a time. This is how frequently the real hardware is updated. A
+                    // possible cycle-accurate improvemtn would be to do this fetch every 8 cycles but
+                    // write the pixels every cycle. Not sure if we actually need to do this to get a
+                    // workable game.
+                    self.last_tile = tile_x;
+                    self.do_visible_scanline(tile_x);
+                }
             }
-            1..VISIBLE_SCANLINES => self.do_visible_scanline(),
-            VISIBLE_SCANLINES => self.do_start_vblank(),
-            NOP_SCANLINES =>
-            // NOTE: This is normally done during all the non-visible frames, but it should be
+
+            // NOTE: This is normally done during all the non-visible scanlines, but it should be
             // fine to do it once at the end...
-            {
-                self.evaluate_sprites()
-            }
-            NOP_SCANLINES..SCANLINES_PER_FRAME => {}
-            SCANLINES_PER_FRAME => {
-                self.do_end_frame();
-            }
-            _ => unreachable!(),
+            (0..VISIBLE_SCANLINES, VISIBLE_CYCLES) => self.evaluate_sprites(),
+            (0..VISIBLE_SCANLINES, _) => { /* nop */ }
+
+            // Render all the sprites on the last scanline, on the last cycle
+            (VISIBLE_SCANLINES, CYCLES_PER_SCANLINE) => self.render_sprites(),
+            (VISIBLE_SCANLINES, _) => { /* nop */ }
+
+            // Kick off a vblank at the start of the non-visible scanlines
+            (NOP_SCANLINES, 0) => self.do_start_vblank(),
+            (NOP_SCANLINES..SCANLINES_PER_FRAME, _) => { /* nop */ }
+
+            // Last cycle of the frame, render it
+            (SCANLINES_PER_FRAME, CYCLES_PER_SCANLINE) => self.do_end_frame(),
+            (SCANLINES_PER_FRAME, _) => { /* nop */ }
+            (scanline, cycle) => unreachable!("scanline={}, cycle={}", scanline, cycle),
         }
 
-        self.cycle -= CYCLES_PER_SCANLINE;
-        self.scanline += 1;
-        if self.scanline > SCANLINES_PER_FRAME {
-            self.scanline = -1;
+        self.cycle += 1;
+
+        // End this scanline
+        if self.cycle > CYCLES_PER_SCANLINE {
+            self.cycle = 0;
+            self.scanline += 1;
+            if self.scanline > SCANLINES_PER_FRAME {
+                self.scanline = -1;
+            }
         }
     }
 
@@ -463,12 +482,148 @@ impl PPU {
     /// https://www.nesdev.org/wiki/PPU_sprite_evaluation
     ///
     /// This is called 30 times per scanline, in chunks of 8 pixels at a time (the width of a tile)
-    fn do_visible_scanline(&mut self) {
+    ///
+    /// Renders a tile at a time, since that's what data we get intially. There are four reads
+    /// required to render a full tile:
+    ///  1. Name table Byte
+    ///  2. Attribute table byte
+    ///  3. Palette table tile low
+    ///  4. Palette table tile high (+8 bytes)
+    fn do_visible_scanline(&mut self, tile_x: i16) {
         // The value of OAMADDR when sprite evaluation starts at tick 65 of the visible scanlines
         // will determine where in OAM sprite evaluation starts, and hence which sprite gets
         // treated as sprite 0. The first OAM entry to be checked during sprite evaluation is the
         // one starting at OAM[OAMADDR].
-        self.write_scanline();
+        assert!(
+            0 <= self.scanline && self.scanline < VISIBLE_SCANLINES,
+            "Should not render during non-visible scanline {}",
+            self.scanline
+        );
+        assert!(self.oam_secondary.len() < 9, "We can only draw 8 sprites");
+
+        event!(
+            Level::DEBUG,
+            "scanline {}> found {} sprites",
+            self.scanline,
+            self.oam_secondary.len(),
+        );
+
+        // FIXME: probably don't need to do the work but this makes things easier to debug
+        //
+        // if !self.rendering_enabled() {
+        //     event!(Level::INFO, "FRAME {}> rendering disabled", self.frame);
+        //     return;
+        // }
+
+        // Sprite evaluation does not cause a hit -- only rendering
+        //
+        // https://www.nesdev.org/wiki/PPU_sprite_evaluation
+        self.update_sprite0_hit();
+
+        self.render_background(tile_x);
+    }
+
+    fn render_background(&mut self, tile_x: i16) {
+        event!(Level::DEBUG, "FRAME {}> rendering background", self.frame);
+
+        let v = self.registers.addr.to_u16();
+        let fine_y = (v >> 12) & 0x7;
+        let nametable_addr: u16 = self.nametable_base() | (v & 0xFFF);
+        let pattable_addr = self.bg_table_base() | self.vram_read(nametable_addr) as u16 | fine_y;
+        println!(
+            "v={:#x}, fine_y={:#x}, nametable={:#x}, pattern_table={:#x}",
+            v, fine_y, nametable_addr, pattable_addr
+        );
+
+        // https://www.nesdev.org/wiki/PPU_palettes
+        let d4 = 0_u8; // Rendering background, choose background palette
+        let d3_d2 = self.read_attr_table(nametable_addr);
+
+        self.ppu_addr_next();
+
+        const HIGH_OFFSET_BYTES: u16 = 8; // The next bitplane for this tile
+        let pattern_lo = self.pattern_table_read(pattable_addr);
+        let pattern_hi = self.pattern_table_read(pattable_addr + HIGH_OFFSET_BYTES);
+        let color_idx = tile_lohi_to_idx(pattern_lo, pattern_hi);
+
+        let tile_y = self.scanline as usize / TILE_HEIGHT_PX as usize;
+        let tile_row = self.scanline as usize % TILE_HEIGHT_PX as usize;
+
+        let addr = ((tile_y * TILE_HEIGHT_PX as usize + tile_row) * FRAME_WIDTH_PX as usize)
+            + tile_x as usize * TILE_WIDTH_PX as usize;
+
+        #[cfg(debug_assertions)]
+        {
+            let inserted = self.fixme_written_addresses.insert(addr);
+            assert!(
+                inserted,
+                "USED> scanline={}, cycle={}, tile_x={}, tile_y={}, addr={}, frame={}",
+                self.scanline, self.cycle, tile_x, tile_y, addr, self.frame
+            );
+        }
+
+        // 0 is transparent, filter these out
+        for (px, &lo) in color_idx.iter().enumerate().filter(|(_, &idx)| idx > 0) {
+            assert!(lo < 4);
+
+            let buf_addr = PX_SIZE_BYTES * (addr + px);
+
+            let color = PALETTE_TABLE[((d4 << 4) | (d3_d2 << 2) | lo) as usize];
+            let render_slice = &mut self.frame_buf[buf_addr..(buf_addr + PX_SIZE_BYTES)];
+            //assert!(render_slice.iter().all(|&p| p == 0));
+            render_slice.copy_from_slice(&to_u8_slice(color));
+        }
+    }
+
+    fn render_sprites(&mut self) {
+        event!(Level::DEBUG, "FRAME {}> rendering sprites", self.frame);
+
+        //   NOTE: To handle overlapping, the sprite data that occurs first will overlap any other
+        //   sprites after it. Therefore we iterate through the list of sprites to render in
+        //   reverse.
+        for (i, sprite) in self.oam_secondary.iter().rev().enumerate() {
+            event!(
+                Level::DEBUG,
+                "SCANLINE {}> rendering sprite {}",
+                self.scanline,
+                i
+            );
+
+            assert!(sprite.y() <= self.scanline as i32);
+            let pat_table_addr = if self.registers.ctrl & PpuCtrl::SPRITE_HEIGHT != 0 {
+                // 16 pixel height sprites
+                (sprite.tile_num() as u16 & 1) << 12_u16 | (sprite.tile_num() as u16 & 0xFE)
+            } else {
+                self.sprite_table_base() | sprite.tile_num() as u16
+            } | self.scanline as u16 - sprite.y() as u16;
+
+            if self.scanline as i32 - sprite.y() > 7 {
+                // Bottom half of the large sprite gets the next tile
+                // pat_table_addr += 0x10;
+                // todo!("Need to render two tiles");
+            }
+
+            const HIGH_OFFSET_BYTES: u16 = 8; // The next bitplane for this tile
+            let pattern_lo = self.pattern_table_read(pat_table_addr);
+            let pattern_hi = self.pattern_table_read(pat_table_addr + HIGH_OFFSET_BYTES);
+            let color_idx = tile_lohi_to_idx(pattern_lo, pattern_hi);
+
+            for (px, &lo_idx) in color_idx.iter().enumerate().filter(|(_, &idx)| idx > 0) {
+                assert!(lo_idx < 4);
+
+                let buf_addr = PX_SIZE_BYTES
+                    * ((self.scanline as usize) * (FRAME_WIDTH_PX as usize)
+                        + sprite.x() as usize
+                        + px as usize);
+
+                let d4 = 1; // Rendering sprite from sprite table
+                let idx = d4 << 4 | sprite.palette_num() | lo_idx;
+
+                let color = PALETTE_TABLE[idx as usize];
+                self.frame_buf[buf_addr..(buf_addr + PX_SIZE_BYTES)]
+                    .copy_from_slice(&to_u8_slice(color));
+            }
+        }
     }
 
     /// Sprite evaluation. This does not render anything, just updates the internal states of the
@@ -516,144 +671,6 @@ impl PPU {
         }
     }
 
-    /// Renders a tile at a time, since that's what data we get intially. There are four reads
-    /// required to render a full tile:
-    ///  1. Name table Byte
-    ///  2. Attribute table byte
-    ///  3. Palette table tile low
-    ///  4. Palette table tile high (+8 bytes)
-    fn write_scanline(&mut self) {
-        assert!(
-            0 <= self.scanline && self.scanline < VISIBLE_SCANLINES,
-            "Should not render during non-visible scanline {}",
-            self.scanline
-        );
-        assert!(self.oam_secondary.len() < 9, "We can only draw 8 sprites");
-
-        event!(
-            Level::DEBUG,
-            "scanline {}> found {} sprites",
-            self.scanline,
-            self.oam_secondary.len(),
-        );
-
-        // FIXME: probably don't need to do the work but this makes things easier to debug
-        //
-        // if !self.rendering_enabled() {
-        //     event!(Level::INFO, "FRAME {}> rendering disabled", self.frame);
-        //     return;
-        // }
-
-        // Sprite evaluation does not cause a hit -- only rendering
-        //
-        // https://www.nesdev.org/wiki/PPU_sprite_evaluation
-        self.update_sprite0_hit();
-
-        event!(Level::DEBUG, "FRAME {}> rendering background", self.frame);
-        // Render background
-        for tile_x in 0..(FRAME_WIDTH_TILES as usize) {
-            let v = self.registers.addr.to_u16();
-            let fine_y = (v >> 12) & 0x7;
-            let nametable_addr: u16 = self.nametable_base() | (v & 0xFFF);
-            let pat_table_addr =
-                self.bg_table_base() | self.vram_read(nametable_addr) as u16 | fine_y;
-
-            // https://www.nesdev.org/wiki/PPU_palettes
-            let d4 = 0_u8; // Rendering background, choose background palette
-            let d3_d2 = self.read_attr_table(nametable_addr);
-
-            self.ppu_addr_next();
-
-            const HIGH_OFFSET_BYTES: u16 = 8; // The next bitplane for this tile
-            let pattern_lo = self.pattern_table_read(pat_table_addr);
-            let pattern_hi = self.pattern_table_read(pat_table_addr + HIGH_OFFSET_BYTES);
-            let color_idx = tile_lohi_to_idx(pattern_lo, pattern_hi);
-
-            // We're drawing a scanline at a time. The tile_num here is the tile within the whole
-            // frame. So for the first TILE_HEIGHT_PX scanlines we should have the same
-            // tile_num
-            let tile_y = self.scanline as usize / TILE_HEIGHT_PX as usize;
-            let tile_row = self.scanline as usize % TILE_HEIGHT_PX as usize;
-
-            let addr = ((tile_y * TILE_HEIGHT_PX as usize + tile_row) * FRAME_WIDTH_PX as usize)
-                + tile_x * TILE_WIDTH_PX as usize;
-
-            #[cfg(debug_assertions)]
-            {
-                let inserted = self.fixme_written_addresses.insert(addr);
-                assert!(
-                    inserted,
-                    "scanline={} tile_x={} tile_y={} addr {} used (frame={})",
-                    self.scanline, tile_x, tile_y, addr, self.frame
-                );
-            }
-
-            // 0 is transparent, filter these out
-            for (px, &lo) in color_idx.iter().enumerate().filter(|(_, &idx)| idx > 0) {
-                assert!(lo < 4);
-
-                let buf_addr = PX_SIZE_BYTES * (addr + px);
-
-                let color = PALETTE_TABLE[((d4 << 4) | (d3_d2 << 2) | lo) as usize];
-                let render_slice = &mut self.frame_buf[buf_addr..(buf_addr + PX_SIZE_BYTES)];
-                //assert!(render_slice.iter().all(|&p| p == 0));
-                render_slice.copy_from_slice(&to_u8_slice(color));
-            }
-        }
-
-        return;
-
-        // Render sprites
-        //
-        //   NOTE: To handle overlapping, the sprite data that occurs first will overlap any other
-        //   sprites after it. Therefore we iterate through the list of sprites to render in
-        //   reverse.
-        event!(Level::DEBUG, "FRAME {}> rendering sprites", self.frame);
-        for (i, sprite) in self.oam_secondary.iter().rev().enumerate() {
-            event!(
-                Level::DEBUG,
-                "SCANLINE {}> rendering sprite {}",
-                self.scanline,
-                i
-            );
-
-            assert!(sprite.y() <= self.scanline as i32);
-            let pat_table_addr = if self.registers.ctrl & PpuCtrl::SPRITE_HEIGHT != 0 {
-                // 16 pixel height sprites
-                (sprite.tile_num() as u16 & 1) << 12_u16 | (sprite.tile_num() as u16 & 0xFE)
-            } else {
-                self.sprite_table_base() | sprite.tile_num() as u16
-            } | self.scanline as u16 - sprite.y() as u16;
-
-            if self.scanline as i32 - sprite.y() > 7 {
-                // Bottom half of the large sprite gets the next tile
-                // pat_table_addr += 0x10;
-                todo!("Need to render two tiles");
-            }
-
-            const HIGH_OFFSET_BYTES: u16 = 8; // The next bitplane for this tile
-            let pattern_lo = self.pattern_table_read(pat_table_addr);
-            let pattern_hi = self.pattern_table_read(pat_table_addr + HIGH_OFFSET_BYTES);
-            let color_idx = tile_lohi_to_idx(pattern_lo, pattern_hi);
-
-            for (px, &lo_idx) in color_idx.iter().enumerate() {
-                assert!(lo_idx < 4);
-
-                let buf_addr = PX_SIZE_BYTES
-                    * ((self.scanline as usize) * (FRAME_WIDTH_PX as usize)
-                        + sprite.x() as usize
-                        + px as usize);
-
-                let d4 = 1; // Rendering sprite from sprite table
-                let idx = d4 << 4 | sprite.palette_num() | lo_idx;
-
-                let color = PALETTE_TABLE[idx as usize];
-                self.frame_buf[buf_addr..(buf_addr + PX_SIZE_BYTES)]
-                    .copy_from_slice(&to_u8_slice(color));
-            }
-        }
-    }
-
     fn render_frame(&mut self) {
         self.renderer.render_frame(
             &self.frame_buf,
@@ -681,7 +698,7 @@ impl PPU {
         // the traditional left and right halves
 
         // There are 16 x 32 tiles
-        const NUM_TILES_VERT: u16 = 16;
+        const NUM_TILES_VERT: i16 = 16;
         let mut used_addrs = [false; 0x2000];
         for row in 0..NUM_TILES_VERT * TILE_HEIGHT_PX {
             let (tile_y, tile_row) = (row / TILE_HEIGHT_PX, row % TILE_HEIGHT_PX);
@@ -694,7 +711,7 @@ impl PPU {
                 used_addrs[chr_addr as usize] = true;
                 used_addrs[chr_addr as usize + 8] = true;
 
-                let (low_byte, high_byte) = read_tile_lohi(chr_addr);
+                let (low_byte, high_byte) = read_tile_lohi(chr_addr as u16);
                 let color_idx = tile_lohi_to_idx(low_byte, high_byte);
 
                 for px in 0..TILE_WIDTH_PX {
