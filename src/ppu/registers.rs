@@ -74,6 +74,7 @@ impl PpuScroll {
             }
             ScrollNextWrite::Y => {
                 self.next_y = Some(val);
+                self.next_wr = ScrollNextWrite::X;
             }
         }
     }
@@ -98,26 +99,50 @@ pub struct Registers {
     pub addr: PpuAddr,
 }
 
-#[derive(Default, Clone, Copy, Debug)]
-pub struct PpuAddr(u16);
+#[derive(Eq, PartialEq, Clone, Copy, Debug)]
+enum AddrNextWrite {
+    Hi,
+    Lo,
+}
 
-impl PpuAddr {
-    pub fn write(&mut self, val: u8) {
-        // Valid addresses are $0000-$3FFF; higher addresses will be mirrored down.
-        self.0 = ((self.0 << 8) | (val as u16)) & 0x3FFF;
-    }
+#[derive(Clone, Copy, Debug)]
+pub struct PpuAddr {
+    addr: u16,
+    next_wr: AddrNextWrite,
+}
 
-    pub fn incr(&mut self, amt: u16) {
-        self.0 = (self.0 + amt) & 0x3FFF;
-    }
-
-    pub fn to_u16(self) -> u16 {
-        self.0
+impl Default for PpuAddr {
+    fn default() -> Self {
+        PpuAddr {
+            addr: 0,
+            next_wr: AddrNextWrite::Hi,
+        }
     }
 }
 
-impl std::convert::Into<u16> for PpuAddr {
-    fn into(self) -> u16 {
-        self.0
+impl PpuAddr {
+    pub fn write(&mut self, val: u8) {
+        match self.next_wr {
+            AddrNextWrite::Hi => {
+                self.addr = ((val as u16) << 8) | (self.addr & 0xFF);
+                self.next_wr = AddrNextWrite::Lo;
+            }
+            AddrNextWrite::Lo => {
+                self.addr = (self.addr & 0xFF00) | val as u16;
+                self.next_wr = AddrNextWrite::Hi;
+            }
+        }
+    }
+
+    pub fn incr(&mut self, amt: u16) {
+        self.addr = self.addr.wrapping_add(amt) & 0x3FFF;
+    }
+
+    pub fn to_u16(self) -> u16 {
+        self.addr & 0x3FFF
+    }
+
+    pub fn reset_addr(&mut self) {
+        self.next_wr = AddrNextWrite::Hi;
     }
 }

@@ -20,6 +20,9 @@ pub trait Bus {
     fn cycles(&self) -> usize;
     fn clock(&mut self, cycles: u8);
     fn pop_nmi(&mut self) -> Option<u8>;
+    fn ppu_state(&self) -> (usize, usize) {
+        (0, 0)
+    }
 }
 
 pub struct NesBus {
@@ -46,7 +49,7 @@ impl NesBus {
             cpu_ram: RAM::with_size(2048),
             nmi: None,
 
-            cycles: 7,
+            cycles: 0,
             cpu_test_enabled: false,
         }
     }
@@ -97,7 +100,7 @@ impl Bus for NesBus {
         self.dump_instr("write", addr, val);
 
         match addr {
-            0x0..=0x1FFF => self.cpu_ram.write(addr % 0x800, val),
+            0x0..=0x1FFF => self.cpu_ram.write(addr & 0x7FF, val),
             0x4000..0x4014 | 0x4015 => {} // self.apu.write_register(addr - 0x4000, val),
             // NOTE: Controllers can be written to to enable strobe mode
             0x4016 => event!(Level::DEBUG, "write to controller 1"),
@@ -139,6 +142,10 @@ impl Bus for NesBus {
         if self.ppu.generate_nmi() {
             self.nmi = Some(1);
         }
+    }
+
+    fn ppu_state(&self) -> (usize, usize) {
+        (self.ppu.scanline(), self.ppu.cycle())
     }
 
     fn pop_nmi(&mut self) -> Option<u8> {

@@ -123,7 +123,7 @@ impl Renderer for SDLRenderer {
     fn render_frame(&mut self, buf: &[u8], width: u32, height: u32) {
         self.canvas
             .set_draw_color(sdl2::pixels::Color::RGB(0, 0, 0));
-        self.canvas.fill_rect(None);
+        self.canvas.fill_rect(None).unwrap();
 
         let mut texture = self
             .tex_creator

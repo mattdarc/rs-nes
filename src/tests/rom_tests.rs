@@ -7,13 +7,6 @@ use venus::{
     ExitStatus,
 };
 
-// Run the test rom from http://www.qmtpro.com/~nes/misc/
-// Compare the output of nestest-log.txt to gold
-//
-// Expected diff:
-// < 0001  FF 00 00  ISB                     A:00 X:FF Y:15 P:27 SP:FF             CYC:26560
-// < 0004  00        BRK                     A:B9 X:FF Y:15 P:A4 SP:FF             CYC:26567
-
 struct NestestParser {
     cpu_states: Vec<CpuState>,
 }
@@ -41,6 +34,8 @@ impl NestestParser {
             static ref REG_RE: Regex =
                 Regex::new(r"(?P<name>[A-Z][A-Z]?):(?P<value>[A-F0-9]{2})").unwrap();
             static ref CYC_RE: Regex = Regex::new(r"CYC:(?P<cycles>[0-9]+)").unwrap();
+            static ref PPU_RE: Regex =
+                Regex::new(r"PPU:\s*(?P<scanline>[0-9]+),\s*(?P<cycle>[0-9]+)").unwrap();
         }
 
         let nestest_log = File::open(filename).or_else(|e| Err(e.to_string()))?;
@@ -75,12 +70,30 @@ impl NestestParser {
                 .as_str()
                 .parse::<usize>()
                 .expect("Cycles not numeric");
+            let ppu_cycle = PPU_RE
+                .captures(line)
+                .unwrap()
+                .name("cycle")
+                .unwrap()
+                .as_str()
+                .parse::<usize>()
+                .expect("PPU cycle not numeric");
+            let scanline = PPU_RE
+                .captures(line)
+                .unwrap()
+                .name("scanline")
+                .unwrap()
+                .as_str()
+                .parse::<usize>()
+                .expect("Scanline not numeric");
 
             let mut builder = CpuStateBuilder::new()
                 .pc(pc)
                 .instruction(opcode)
                 .operands(args)
-                .cycles(cycles);
+                .cycles(cycles)
+                .scanline(scanline)
+                .ppu_cycle(ppu_cycle);
 
             for reg in REG_RE.captures_iter(line) {
                 let value = u8::from_str_radix(reg.name("value").unwrap().as_str(), 16).unwrap();
@@ -103,14 +116,15 @@ impl NestestParser {
     }
 }
 
-#[cfg(test)]
+#[test]
 fn nestest() {
     const GOLD_FILE: &str = "test/nestest.log.gold";
     let nestest_state = NestestParser::new(GOLD_FILE).expect("Error parsing gold file");
 
-    let mut nes = VNES::new("test/nestest.nes").expect("Could not load nestest ROM");
+    let mut nes = VNES::new_headless("test/nestest.nes").expect("Could not load nestest ROM");
+
     const NESTEST_AUTOMATED_START: u16 = 0xC000;
-    nes.reset_override(NESTEST_AUTOMATED_START);
+    nes.nestest_reset_override(NESTEST_AUTOMATED_START);
 
     for s in nestest_state.cpu_states.iter() {
         if nes.run_once() != ExitStatus::Continue {

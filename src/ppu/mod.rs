@@ -60,10 +60,10 @@ use std::time;
 use tracing::{event, Level};
 
 // FIXME: Need to fix up these types a bit
-const SCANLINES_PER_FRAME: i16 = 262;
+const SCANLINES_PER_FRAME: i16 = 260;
 const VISIBLE_SCANLINES: i16 = 240;
 const CYCLES_PER_SCANLINE: i16 = 341;
-const VISIBLE_CYCLES: i16 = 256;
+const VISIBLE_CYCLES: i16 = 257;
 const CYCLES_PER_TILE: i16 = 8;
 const STARTUP_SCANLINES: i16 = 30_000_i16 / CYCLES_PER_SCANLINE as i16;
 
@@ -91,8 +91,15 @@ const PALETTE_TABLE: [u32; 64] = [
     0xF8D87800, 0xD8F87800, 0xB8F8B800, 0xB8F8D800, 0x00FCFC00, 0xF8D8F800, 0x00000000, 0x00000000,
 ];
 
+#[derive(Default)]
+struct Tile {
+    attribute_byte: u8,
+    pattern_lo: u8,
+    pattern_hi: u8,
+}
+
 pub struct PPU {
-    frame_buf: [u8; FRAME_SIZE_BYTES],
+    frame_buf: Vec<u8>,
     cartridge: Cartridge,
 
     // Cache the header in the PPU so we don't need to keep dispatching to the shared cartridge.
@@ -113,9 +120,15 @@ pub struct PPU {
     scanline: i16,
     frame: usize,
     last_tile: i16,
+    tile_data: Tile,
+
+    palette_table: [u8; 32],
+
+    // Requires a dummy read to push out this value
+    last_fetch: u8,
+    timestamp: time::Instant,
 
     fixme_written_addresses: std::collections::HashSet<usize>,
-    timestamp: time::Instant,
 }
 
 fn to_u8_slice(x: u32) -> [u8; 4] {
@@ -137,13 +150,14 @@ fn to_u8_slice(x: u32) -> [u8; 4] {
 ///   [ A ] [ B ]
 ///   [ a ] [ b ]
 fn mirror(mirror: &Mirroring, addr: u16) -> u16 {
-    match mirror {
-        // AaBb
-        Mirroring::Horizontal => addr & 0xBFF,
+    (addr & !0xFFF)
+        | match mirror {
+            // AaBb
+            Mirroring::Horizontal => (addr & 0xBFF),
 
-        // ABab
-        Mirroring::Vertical => addr & 0x7FF,
-    }
+            // ABab
+            Mirroring::Vertical => addr & 0x7FF,
+        }
 }
 
 /// Convert the low and the high byte to the corresponding indices from [0,3]
@@ -156,41 +170,54 @@ fn tile_lohi_to_idx(low: u8, high: u8) -> [u8; 8] {
     color_idx
 }
 
+const PPU_VRAM_SIZE: u16 = 0x2000;
 const NAMETABLE_START: u16 = 0x2F00;
 impl PPU {
     pub fn new(cartridge: Cartridge, renderer: Box<dyn Renderer>) -> Self {
         let cartridge_header = cartridge.header();
+
         PPU {
-            frame_buf: [0_u8; FRAME_SIZE_BYTES],
+            frame_buf: vec![0_u8; FRAME_SIZE_BYTES],
             cartridge,
             cartridge_header,
+            palette_table: [0; 32],
             registers: Registers::default(),
             flags: Flags::default(),
             renderer,
             oam_primary: [0; 256],
             oam_secondary: Vec::new(),
             cycle: 0,
-            scanline: -1,
+            scanline: 0,
             frame: 0,
-            last_tile: FRAME_WIDTH_TILES,
+            last_tile: 0,
+            tile_data: Tile::default(),
+            last_fetch: 0,
 
-            vram: RAM::with_size(0x3000),
+            vram: RAM::with_size(PPU_VRAM_SIZE),
             fixme_written_addresses: std::collections::HashSet::new(),
             timestamp: time::Instant::now(),
         }
+    }
+
+    pub fn cycle(&self) -> usize {
+        self.cycle as usize
+    }
+
+    pub fn scanline(&self) -> usize {
+        self.scanline as usize
     }
 
     pub fn set_renderer(&mut self, renderer: Box<dyn Renderer>) {
         self.renderer = renderer;
     }
 
-    // FIXME: These implement some special behavior after beiing accessed
     pub fn register_read(&mut self, addr: u16) -> u8 {
         let ret = match (addr - 0x2000) % 8 {
             0 => self.registers.ctrl,
             1 => self.registers.mask,
             2 => {
                 self.registers.scroll.reset_addr();
+                self.registers.addr.reset_addr();
                 self.registers.status
             }
             3 => self.registers.oamaddr,
@@ -198,11 +225,10 @@ impl PPU {
             5 => panic!("Cannot read PPU scroll!"),
             6 => panic!("Cannot read PPU address!"),
             7 => {
-                let addr: u16 = self.registers.addr.into();
-                self.ppu_addr_next();
-                self.vram_read(addr)
+                let addr: u16 = self.ppu_addr_read();
+                self.ppu_read(addr)
             }
-            _ => panic!("Invalid PPU Register read: address {:X}", addr),
+            _ => unreachable!(),
         };
 
         event!(
@@ -213,11 +239,6 @@ impl PPU {
         );
 
         ret
-    }
-
-    pub fn oam_dma(&mut self, data: &[u8]) {
-        assert_eq!(data.len(), 256, "Data should be 1 full page");
-        self.oam_primary.as_mut_slice().copy_from_slice(data);
     }
 
     pub fn register_write(&mut self, addr: u16, val: u8) {
@@ -242,37 +263,97 @@ impl PPU {
                 // https://www.nesdev.org/wiki/PPU_registers#OAMDATA
                 if self.scanline >= VISIBLE_SCANLINES {
                     self.registers.oamdata = val;
-                    self.registers.oamaddr += 1;
                 }
+                self.registers.oamaddr += 1;
             }
             5 => self.registers.scroll.write(val),
             6 => self.registers.addr.write(val),
             7 => {
-                let addr: u16 = self.registers.addr.into();
-                self.ppu_addr_next();
-                self.vram_write(addr, val);
+                let addr: u16 = self.ppu_addr_read();
+                self.ppu_write(addr, val);
             }
-            _ => panic!("Invalid PPU Register write: address {:#X}", addr),
+            _ => unreachable!(),
         }
     }
 
-    fn vram_read(&self, addr: u16) -> u8 {
-        self.vram
-            .read(mirror(self.cartridge_header.get_mirroring(), addr))
+    pub fn oam_dma(&mut self, data: &[u8]) {
+        assert_eq!(data.len(), 256, "Data should be 1 full page");
+        self.oam_primary.as_mut_slice().copy_from_slice(data);
     }
 
-    fn vram_write(&mut self, addr: u16, val: u8) {
-        self.vram
-            .write(mirror(self.cartridge_header.get_mirroring(), addr), val)
+    // https://www.nesdev.org/wiki/PPU_memory_map
+    fn ppu_write(&mut self, addr: u16, val: u8) {
+        match addr {
+            // Pattern tables 0 and 1
+            0..=0x1FFF => {
+                // Ignore writes to CHR
+                event!(
+                    Level::DEBUG,
+                    "ignoring write to CHR ROM at {:#x} of {:#x}",
+                    addr,
+                    val,
+                );
+            }
+
+            // Nametables
+            0x2000..=0x3EFF => {
+                let vram_offset =
+                    mirror(self.cartridge_header.get_mirroring(), addr) - PPU_VRAM_SIZE;
+                println!(
+                    "[{}]> writing to VRAM *{:#x} = {:#x}",
+                    self.cycle, vram_offset, val
+                );
+                self.vram.write(vram_offset, val)
+            }
+
+            // $3F00-$3F1F: Palette RAM
+            0x3F00..=0x3FFF => self.palette_write(addr - 0x3F00, val),
+            _ => unreachable!(),
+        }
     }
 
-    fn ppu_addr_next(&mut self) {
-        let amt = if self.registers.ctrl & PpuCtrl::VRAM_INCR != 0 {
+    // https://www.nesdev.org/wiki/PPU_memory_map
+    fn ppu_read(&mut self, addr: u16) -> u8 {
+        match addr {
+            // Pattern tables 0 and 1
+            0..=0x1FFF => {
+                let val = self.last_fetch;
+                self.last_fetch = self.cartridge.chr_read(addr);
+                val
+            }
+
+            // Nametables
+            0x2000..=0x3EFF => {
+                let val = self.last_fetch;
+                let vram_offset =
+                    mirror(self.cartridge_header.get_mirroring(), addr) - PPU_VRAM_SIZE;
+                // println!(
+                //     "[{}]> reading from VRAM *{:#x} (orig={:#x}) == {:#x}",
+                //     self.cycle, vram_offset, addr, val
+                // );
+                self.last_fetch = self.vram.read(vram_offset);
+                val
+            }
+
+            // $3F00-$3F1F: Palette RAM
+            0x3F00..=0x3FFF => {
+                self.last_fetch = self.palette_read(addr - 0x3F00);
+                self.last_fetch
+            }
+            _ => unreachable!(),
+        }
+    }
+
+    fn ppu_addr_read(&mut self) -> u16 {
+        let addr = self.registers.addr.to_u16();
+        let amt = if (self.registers.ctrl & PpuCtrl::VRAM_INCR) != 0 {
             32
         } else {
             1
         };
         self.registers.addr.incr(amt);
+
+        addr
     }
 
     fn pattern_table_read(&self, addr: u16) -> u8 {
@@ -341,8 +422,8 @@ impl PPU {
         if self.rendering_enabled() {
             // FIXME: This should be done on a line basis in do_visible_scanline
             self.render_frame();
-            self.clear_render_buffer();
         }
+        self.clear_render_buffer();
 
         std::thread::sleep(std::time::Duration::from_millis(16));
     }
@@ -353,11 +434,33 @@ impl PPU {
         }
     }
 
-    #[tracing::instrument(target = "ppu", skip(self))]
-    pub fn clock(&mut self, ticks: i16) {
-        for _ in 0..ticks {
-            self.tick_once();
-        }
+    fn do_tile_fetches(&mut self) {
+        event!(
+            Level::DEBUG,
+            "FRAME {}, SCANLINE {}, CYCLE {}> fetching tile",
+            self.frame,
+            self.scanline,
+            self.cycle,
+        );
+
+        let v = self.ppu_addr_read();
+        let fine_y = (v >> 12) & 0x7;
+        let nametable_addr: u16 = 0x2000 | (v & 0x1FFF);
+        let nametable_byte = self.ppu_read(nametable_addr);
+
+        let attribute_addr = 0x23C0 | (v & 0x0C00) | ((v >> 4) & 0x38) | ((v >> 2) & 0x07);
+        let attribute_byte = self.read_attr_table(attribute_addr);
+
+        const HIGH_OFFSET_BYTES: u16 = 8; // The next bitplane for this tile
+        let pattable_addr = self.bg_table_base() | nametable_byte as u16 | fine_y;
+        let pattern_lo = self.ppu_read(pattable_addr);
+        let pattern_hi = self.ppu_read(pattable_addr + HIGH_OFFSET_BYTES);
+
+        self.tile_data = Tile {
+            attribute_byte,
+            pattern_lo,
+            pattern_hi,
+        };
     }
 
     fn tick_once(&mut self) {
@@ -368,51 +471,58 @@ impl PPU {
         //    initialized to $FF - attempting to read $2004 will return $FF
         //  * Cycles 257-320: (the sprite tile loading interval) of the pre-render and visible
         //    scanlines. OAMADDR is set to 0 during each of ticks
-        const NOP_SCANLINES: i16 = VISIBLE_SCANLINES + 1;
-        const NOP_CYCLES: i16 = VISIBLE_CYCLES + 1;
+
+        if self.cycle > 0 && (self.cycle - 1) % 8 == 0 {
+            self.do_tile_fetches();
+        }
+
+        // https://www.nesdev.org/wiki/PPU_rendering
         match (self.scanline, self.cycle) {
             (-1, _) => { /* dummy scanline */ }
 
-            (0..VISIBLE_SCANLINES, 0..VISIBLE_CYCLES) => {
-                let tile_x = self.cycle / TILE_WIDTH_PX;
+            // Visible scanlines (0-239)
+            (0..240, 0) => { /* idle cycle */ }
+            (0..240, 1..257) => {
+                let tile_x = (self.cycle - 1) / TILE_WIDTH_PX;
                 if tile_x != self.last_tile {
-                    // Render one tile at a time. This is how frequently the real hardware is updated. A
-                    // possible cycle-accurate improvemtn would be to do this fetch every 8 cycles but
-                    // write the pixels every cycle. Not sure if we actually need to do this to get a
-                    // workable game.
+                    // Render one tile at a time. This is how frequently the real hardware is
+                    // updated. A possible cycle-accurate improvememt would be to do this fetch
+                    // every 8 cycles but write the pixels every cycle. Not sure if we actually
+                    // need to do this to get a workable game.
                     self.last_tile = tile_x;
                     self.do_visible_scanline(tile_x);
                 }
             }
+            (0..240, 257..321) => { /* FIXME: self.evaluate_sprites() */ }
+            (0..240, 321..337) => { /* FIXME: fetch first two tiles for the next frame */ }
+            (0..240, 337..342) => { /* FIXME: garbage nametable fetches */ }
 
-            // NOTE: This is normally done during all the non-visible scanlines, but it should be
-            // fine to do it once at the end...
-            (0..VISIBLE_SCANLINES, VISIBLE_CYCLES) => self.evaluate_sprites(),
-            (0..VISIBLE_SCANLINES, _) => { /* nop */ }
+            (240, _) => { /* idle scanline */ }
 
-            // Render all the sprites on the last scanline, on the last cycle
-            (VISIBLE_SCANLINES, CYCLES_PER_SCANLINE) => self.render_sprites(),
-            (VISIBLE_SCANLINES, _) => { /* nop */ }
+            (241, 1) => self.do_start_vblank(),
+            (241..260, _) | (260, 0..341) => { /* PPU should make no memory accesses */ }
 
-            // Kick off a vblank at the start of the non-visible scanlines
-            (NOP_SCANLINES, 0) => self.do_start_vblank(),
-            (NOP_SCANLINES..SCANLINES_PER_FRAME, _) => { /* nop */ }
+            (260, 341) => self.do_end_frame(),
 
-            // Last cycle of the frame, render it
-            (SCANLINES_PER_FRAME, CYCLES_PER_SCANLINE) => self.do_end_frame(),
-            (SCANLINES_PER_FRAME, _) => { /* nop */ }
             (scanline, cycle) => unreachable!("scanline={}, cycle={}", scanline, cycle),
         }
 
         self.cycle += 1;
 
         // End this scanline
-        if self.cycle > CYCLES_PER_SCANLINE {
-            self.cycle = 0;
+        if self.cycle >= CYCLES_PER_SCANLINE {
+            self.cycle -= CYCLES_PER_SCANLINE;
             self.scanline += 1;
-            if self.scanline > SCANLINES_PER_FRAME {
-                self.scanline = -1;
+            if self.scanline >= SCANLINES_PER_FRAME {
+                self.scanline -= SCANLINES_PER_FRAME;
             }
+        }
+    }
+
+    #[tracing::instrument(target = "ppu", skip(self))]
+    pub fn clock(&mut self, ticks: i16) {
+        for _ in 0..ticks {
+            self.tick_once();
         }
     }
 
@@ -440,30 +550,9 @@ impl PPU {
         }
     }
 
-    fn read_attr_table(&self, v: u16) -> u8 {
-        assert!(0x2000 <= v && v < 0x4000, "address {:#X} out of range", v);
-        // 120 attribute table is a 64-byte array at the end of each nametable that controls which
-        // palette is assigned to each part of the background.
-        //
-        // Each attribute table, starting at $23C0, $27C0, $2BC0, or $2FC0, is arranged as an 8x8
-        // byte array: https://wiki.nesdev.org/w/index.php?title=PPU_attribute_tables
-        //
-        // ,---+---+---+---.
-        // |   |   |   |   |
-        // + D1-D0 + D3-D2 +
-        // |   |   |   |   |
-        // +---+---+---+---+
-        // |   |   |   |   |
-        // + D5-D4 + D7-D6 +
-        // |   |   |   |   |
-        // `---+---+---+---'
-
-        // Tile and attribute fetching
-        // https://www.nesdev.org/wiki/PPU_scrolling
+    fn read_attr_table(&mut self, v: u16) -> u8 {
         let attr_addr = 0x23C0 | (v & 0x0C00) | ((v >> 4) & 0x38) | ((v >> 2) & 0x07);
-        let attr_byte = self.vram_read(attr_addr);
-        let shift = ((v >> 4) & 4) | (v & 2);
-        ((attr_byte >> shift) & 0x3) << 2
+        self.ppu_read(attr_addr)
     }
 
     /// Generate an NMI. One called, the flag will be reset to false
@@ -501,13 +590,6 @@ impl PPU {
         );
         assert!(self.oam_secondary.len() < 9, "We can only draw 8 sprites");
 
-        event!(
-            Level::DEBUG,
-            "scanline {}> found {} sprites",
-            self.scanline,
-            self.oam_secondary.len(),
-        );
-
         // FIXME: probably don't need to do the work but this makes things easier to debug
         //
         // if !self.rendering_enabled() {
@@ -521,33 +603,82 @@ impl PPU {
         self.update_sprite0_hit();
 
         self.render_background(tile_x);
+
+        // self.render_sprites();
+    }
+
+    fn palette_read(&mut self, mut addr: u16) -> u8 {
+        assert!(addr <= 0xFF);
+
+        // Addresses $3F10/$3F14/$3F18/$3F1C are mirrors of $3F00/$3F04/$3F08/$3F0C
+        if addr % 4 == 0 {
+            addr &= !0x10;
+        }
+
+        // $3F20-$3FFF: mirrors of palette RAM
+        self.palette_table[(addr & 0x1F) as usize]
+    }
+
+    fn palette_write(&mut self, mut addr: u16, val: u8) {
+        assert!(addr <= 0xFF);
+
+        // Addresses $3F10/$3F14/$3F18/$3F1C are mirrors of $3F00/$3F04/$3F08/$3F0C
+        if addr % 4 == 0 {
+            addr &= !0x10;
+        }
+        // $3F20-$3FFF: mirrors of palette RAM
+        self.palette_table[(addr & 0x1F) as usize] = val;
     }
 
     fn render_background(&mut self, tile_x: i16) {
-        event!(Level::DEBUG, "FRAME {}> rendering background", self.frame);
+        let tile_y = self.scanline as usize / TILE_HEIGHT_PX as usize;
+        let tile_row = self.scanline as usize % TILE_HEIGHT_PX as usize;
 
-        let v = self.registers.addr.to_u16();
-        let fine_y = (v >> 12) & 0x7;
-        let nametable_addr: u16 = self.nametable_base() | (v & 0xFFF);
-        let pattable_addr = self.bg_table_base() | self.vram_read(nametable_addr) as u16 | fine_y;
-        println!(
-            "v={:#x}, fine_y={:#x}, nametable={:#x}, pattern_table={:#x}",
-            v, fine_y, nametable_addr, pattable_addr
+        event!(
+            Level::DEBUG,
+            "FRAME {}, SCANLINE {}> rendering background (x={}, y={}, r={})",
+            self.frame,
+            self.scanline,
+            tile_x,
+            tile_y,
+            tile_row
         );
+
+        let Tile {
+            attribute_byte,
+            pattern_lo,
+            pattern_hi,
+        } = self.tile_data;
 
         // https://www.nesdev.org/wiki/PPU_palettes
         let d4 = 0_u8; // Rendering background, choose background palette
-        let d3_d2 = self.read_attr_table(nametable_addr);
 
-        self.ppu_addr_next();
+        // 120 attribute table is a 64-byte array at the end of each nametable that controls which
+        // palette is assigned to each part of the background.
+        //
+        // Each attribute table, starting at $23C0, $27C0, $2BC0, or $2FC0, is arranged as an 8x8
+        // byte array: https://wiki.nesdev.org/w/index.php?title=PPU_attribute_tables
+        //
+        //        0       1
+        //    ,---+---+---+---.
+        //    |   |   |   |   |
+        //  0 + D1-D0 + D3-D2 +
+        //    |   |   |   |   |
+        //    +---+---+---+---+
+        //    |   |   |   |   |
+        //  1 + D5-D4 + D7-D6 +
+        //    |   |   |   |   |
+        //    `---+---+---+---'
 
-        const HIGH_OFFSET_BYTES: u16 = 8; // The next bitplane for this tile
-        let pattern_lo = self.pattern_table_read(pattable_addr);
-        let pattern_hi = self.pattern_table_read(pattable_addr + HIGH_OFFSET_BYTES);
-        let color_idx = tile_lohi_to_idx(pattern_lo, pattern_hi);
-
-        let tile_y = self.scanline as usize / TILE_HEIGHT_PX as usize;
-        let tile_row = self.scanline as usize % TILE_HEIGHT_PX as usize;
+        // Tile and attribute fetching
+        // https://www.nesdev.org/wiki/PPU_scrolling
+        let d3_d2 = match (tile_x % 2, tile_y % 2) {
+            (0, 0) => (attribute_byte >> 0) & 0x3,
+            (1, 0) => (attribute_byte >> 2) & 0x3,
+            (0, 1) => (attribute_byte >> 4) & 0x3,
+            (1, 1) => (attribute_byte >> 6) & 0x3,
+            _ => unreachable!(),
+        };
 
         let addr = ((tile_y * TILE_HEIGHT_PX as usize + tile_row) * FRAME_WIDTH_PX as usize)
             + tile_x as usize * TILE_WIDTH_PX as usize;
@@ -562,21 +693,31 @@ impl PPU {
             );
         }
 
+        let color_idx = tile_lohi_to_idx(pattern_lo, pattern_hi);
+
         // 0 is transparent, filter these out
         for (px, &lo) in color_idx.iter().enumerate().filter(|(_, &idx)| idx > 0) {
             assert!(lo < 4);
 
-            let buf_addr = PX_SIZE_BYTES * (addr + px);
+            let palette_addr = (d4 << 4) | (d3_d2 << 2) | lo;
+            let color_idx = self.palette_read(palette_addr as u16);
+            let color = PALETTE_TABLE[color_idx as usize];
 
-            let color = PALETTE_TABLE[((d4 << 4) | (d3_d2 << 2) | lo) as usize];
+            let buf_addr = PX_SIZE_BYTES * (addr + px);
             let render_slice = &mut self.frame_buf[buf_addr..(buf_addr + PX_SIZE_BYTES)];
-            //assert!(render_slice.iter().all(|&p| p == 0));
+
+            assert!(render_slice.iter().all(|&p| p == 0));
             render_slice.copy_from_slice(&to_u8_slice(color));
         }
     }
 
     fn render_sprites(&mut self) {
-        event!(Level::DEBUG, "FRAME {}> rendering sprites", self.frame);
+        event!(
+            Level::DEBUG,
+            "FRAME {}, SCANLINE {}> rendering sprites",
+            self.frame,
+            self.scanline
+        );
 
         //   NOTE: To handle overlapping, the sprite data that occurs first will overlap any other
         //   sprites after it. Therefore we iterate through the list of sprites to render in
@@ -616,8 +757,8 @@ impl PPU {
                         + sprite.x() as usize
                         + px as usize);
 
-                let d4 = 1; // Rendering sprite from sprite table
-                let idx = d4 << 4 | sprite.palette_num() | lo_idx;
+                let d3 = 1; // Rendering sprite from sprite table
+                let idx = d3 << 3 | sprite.palette_num() | lo_idx;
 
                 let color = PALETTE_TABLE[idx as usize];
                 self.frame_buf[buf_addr..(buf_addr + PX_SIZE_BYTES)]
@@ -631,12 +772,15 @@ impl PPU {
     ///
     /// Returns the number of sprites that must be rendered
     fn evaluate_sprites(&mut self) {
-        event!(Level::DEBUG, "FRAME {}> evaluating sprites", self.frame);
+        event!(
+            Level::DEBUG,
+            "FRAME {}, SCANLINE {}> evaluating sprites",
+            self.frame,
+            self.scanline
+        );
 
         let sprite_height = sprite::Sprite::height_px(self.registers.ctrl & PpuCtrl::SPRITE_HEIGHT);
 
-        // No more sprites will be found once the end of OAM is reached, effectively hiding any
-        // sprites before OAM[OAMADDR].
         let mut m = 0;
         const SPRITE_STRIDE: usize = 4;
         for n in (self.registers.oamaddr as usize..256_usize).step_by(SPRITE_STRIDE) {
@@ -647,6 +791,12 @@ impl PPU {
             }
 
             let addr = (n + m) as usize & 0xFF;
+
+            if addr + 4 >= self.oam_primary.len() {
+                // No more sprites will be found once the end of OAM is reached, effectively hiding
+                // any sprites before OAM[OAMADDR].
+                break;
+            }
 
             // If OAMADDR is unaligned and does not point to the y position (first byte) of an OAM
             // entry, then whatever it points to (tile index, attribute, or x coordinate) will be
@@ -669,6 +819,13 @@ impl PPU {
 
             self.oam_secondary.push(sprite);
         }
+
+        event!(
+            Level::DEBUG,
+            "scanline {}> found {} sprites",
+            self.scanline,
+            self.oam_secondary.len(),
+        );
     }
 
     fn render_frame(&mut self) {
@@ -760,10 +917,10 @@ mod test {
     #[test]
     fn nametable_mirroring() {
         assert_eq!(mirror(&Mirroring::Vertical, 0x0000), 0x0000);
-        assert_eq!(mirror(&Mirroring::Vertical, 0x0400), 0x0400);
-        assert_eq!(mirror(&Mirroring::Vertical, 0x0038), 0x0038);
-        assert_eq!(mirror(&Mirroring::Vertical, 0x0438), 0x0438);
-        assert_eq!(mirror(&Mirroring::Vertical, 0x0801), 0x0001);
+        assert_eq!(mirror(&Mirroring::Vertical, 0x1400), 0x1400);
+        assert_eq!(mirror(&Mirroring::Vertical, 0x3038), 0x3038);
+        assert_eq!(mirror(&Mirroring::Vertical, 0x7438), 0x7438);
+        assert_eq!(mirror(&Mirroring::Vertical, 0xF801), 0xF001);
 
         assert_eq!(mirror(&Mirroring::Horizontal, 0x0000), 0x0000);
         assert_eq!(mirror(&Mirroring::Horizontal, 0x0400), 0x0000);

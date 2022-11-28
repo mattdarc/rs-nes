@@ -88,12 +88,17 @@ buildable!(CpuState; CpuStateBuilder {
     y: u8,
     pc: u16,
     sp: u8,
+
+    // PPU
+    scanline: usize,
+    ppu_cycle: usize,
 });
 
 pub struct CPU<BusType: Bus> {
     acc: u8,
     x: u8,
     y: u8,
+    old_pc: u16,
     pc: u16,
     sp: u8,
     status: Status,
@@ -115,6 +120,7 @@ impl<BusType: Bus> CPU<BusType> {
             acc: 0,
             x: 0,
             y: 0,
+            old_pc: 0,
             pc: 0,
             sp: 0xFD,
             status: Status::empty(),
@@ -131,7 +137,10 @@ impl<BusType: Bus> CPU<BusType> {
         self.pc
     }
 
+    #[cfg(feature = "nestest")]
     fn save_cpu_state(&mut self) {
+        let (scanline, ppu_cycle) = self.bus.ppu_state();
+
         self.old_state = Some(CpuState {
             cycles: self.bus.cycles(),
             instruction: self.instruction,
@@ -139,28 +148,37 @@ impl<BusType: Bus> CPU<BusType> {
             acc: self.acc,
             x: self.x,
             y: self.y,
-            pc: self.pc,
+            pc: self.old_pc,
             sp: self.sp,
+            scanline,
+            ppu_cycle,
         });
     }
 
-    #[cfg(test)]
+    #[cfg(feature = "nestest")]
     pub fn state(&self) -> &CpuState {
         self.old_state
             .as_ref()
             .expect("CPU has not run. There is no state")
     }
 
-    pub fn reset_override(&mut self, pc: u16) {
-        event!(Level::DEBUG, "reset PC {:#X} -> {:#X}", self.pc, pc);
+    pub fn nestest_reset_override(&mut self, pc: u16) {
+        event!(Level::DEBUG, "reset PC {:#x} -> {:#x}", self.pc, pc);
         self.pc = pc;
         self.status = Status::default();
         self.sp = 0xFD;
+
+        // nestest starts with 7 cycles initially... not sure why
+        self.bus.clock(7);
     }
 
     pub fn reset(&mut self) {
         let pc = self.bus.read16(RESET_VECTOR_START);
-        self.reset_override(pc);
+        event!(Level::DEBUG, "reset PC {:#x} -> {:#x}", self.pc, pc);
+
+        self.pc = pc;
+        self.status = Status::default();
+        self.sp = 0xFD;
     }
 
     pub fn clock(&mut self) -> ExitStatus {
@@ -172,6 +190,12 @@ impl<BusType: Bus> CPU<BusType> {
         );
         {
             let _enter = cpu_span.enter();
+
+            self.fetch_instruction();
+
+            #[cfg(feature = "nestest")]
+            self.save_cpu_state();
+
             self.execute_instruction();
             if let Some(status) = self.bus.pop_nmi() {
                 event!(Level::INFO, NMI.status = status);
@@ -180,6 +204,7 @@ impl<BusType: Bus> CPU<BusType> {
         }
 
         self.bus.clock(self.cycles);
+
         self.exit_status.clone()
     }
 
@@ -194,9 +219,7 @@ impl<BusType: Bus> CPU<BusType> {
         event!(Level::TRACE, "IRQ: {:#04X}", self.pc);
     }
 
-    fn execute_instruction(&mut self) {
-        use instructions::InstrName::*;
-
+    fn fetch_instruction(&mut self) {
         let opcode = self.bus.read(self.pc);
         self.instruction = instructions::decode_instruction(opcode);
 
@@ -209,14 +232,13 @@ impl<BusType: Bus> CPU<BusType> {
             self.operands[i] = self.bus.read(self.pc + (i as u16) + 1);
         }
 
-        event!(Level::INFO, "{:#04X}> {:?}", self.pc, &self.instruction);
-
-        #[cfg(test)]
-        self.save_cpu_state();
-
-        // FIXME: incrementing the pc should go at the end. All this should go into a post_execute
-        // function
+        event!(Level::INFO, "{:#04x}> {:?}", self.pc, &self.instruction);
+        self.old_pc = self.pc;
         self.pc += self.instruction.size();
+    }
+
+    fn execute_instruction(&mut self) {
+        use instructions::InstrName::*;
 
         match self.instruction.name() {
             // BRANCHES

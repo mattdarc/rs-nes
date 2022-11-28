@@ -1,4 +1,5 @@
 #![allow(dead_code)]
+#![allow(inactive_code)]
 #![feature(exclusive_range_pattern)]
 
 extern crate sdl2;
@@ -53,17 +54,19 @@ impl VNES {
         Ok(VNES { cpu: CPU::new(bus) })
     }
 
-    pub fn state(&self) -> &cpu::CpuState {
-        if cfg!(test) {
-            #[cfg(test)]
-            return self.cpu.state();
-        }
-
-        unreachable!()
+    pub fn new_headless(rom: &str) -> std::io::Result<Self> {
+        let game = Cartridge::load(rom)?;
+        let bus = NesBus::new(game, Box::new(graphics::nop::NOPRenderer::new()));
+        Ok(VNES { cpu: CPU::new(bus) })
     }
 
-    pub fn reset_override(&mut self, pc: u16) {
-        self.cpu.reset_override(pc);
+    #[cfg(feature = "nestest")]
+    pub fn state(&self) -> &cpu::CpuState {
+        return self.cpu.state();
+    }
+
+    pub fn nestest_reset_override(&mut self, pc: u16) {
+        self.cpu.nestest_reset_override(pc);
     }
 
     pub fn reset(&mut self) {

@@ -36,7 +36,7 @@ pub trait Renderer {
 }
 
 fn dump_texture_buf(buf: &[u8], px_size: usize) {
-    let width = 128;
+    let width = 256;
 
     let mut s = String::new();
     for idx in (0..buf.len()).step_by(px_size) {
