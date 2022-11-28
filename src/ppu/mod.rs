@@ -75,7 +75,7 @@ const TILE_SIZE_BYTES: i16 = 16;
 
 const FRAME_WIDTH_TILES: i16 = 32;
 const FRAME_HEIGHT_TILES: i16 = 30;
-const FRAME_HEIGHT_PX: i16 = 256;
+const FRAME_HEIGHT_PX: i16 = FRAME_HEIGHT_TILES * TILE_HEIGHT_PX;
 const FRAME_WIDTH_PX: i16 = FRAME_WIDTH_TILES * TILE_WIDTH_PX;
 const FRAME_SIZE_BYTES: usize =
     PX_SIZE_BYTES * (FRAME_HEIGHT_PX as usize) * (FRAME_WIDTH_PX as usize);
@@ -445,7 +445,7 @@ impl PPU {
 
         let v = self.ppu_addr_read();
         let fine_y = (v >> 12) & 0x7;
-        let nametable_addr: u16 = 0x2000 | (v & 0x1FFF);
+        let nametable_addr: u16 = 0x2000 | (v & 0xFFF);
         let nametable_byte = self.ppu_read(nametable_addr);
 
         let attribute_addr = 0x23C0 | (v & 0x0C00) | ((v >> 4) & 0x38) | ((v >> 2) & 0x07);
@@ -500,9 +500,7 @@ impl PPU {
             (240, _) => { /* idle scanline */ }
 
             (241, 1) => self.do_start_vblank(),
-            (241..260, _) | (260, 0..341) => { /* PPU should make no memory accesses */ }
-
-            (260, 341) => self.do_end_frame(),
+            (241..260, _) => { /* PPU should make no memory accesses */ }
 
             (scanline, cycle) => unreachable!("scanline={}, cycle={}", scanline, cycle),
         }
@@ -515,6 +513,7 @@ impl PPU {
             self.scanline += 1;
             if self.scanline >= SCANLINES_PER_FRAME {
                 self.scanline -= SCANLINES_PER_FRAME;
+                self.do_end_frame();
             }
         }
     }
@@ -616,7 +615,7 @@ impl PPU {
         }
 
         // $3F20-$3FFF: mirrors of palette RAM
-        self.palette_table[(addr & 0x1F) as usize]
+        self.palette_table[(addr & 0x1F) as usize] & 0x1F
     }
 
     fn palette_write(&mut self, mut addr: u16, val: u8) {

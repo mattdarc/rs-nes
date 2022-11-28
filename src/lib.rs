@@ -1,5 +1,4 @@
 #![allow(dead_code)]
-#![allow(inactive_code)]
 #![feature(exclusive_range_pattern)]
 
 extern crate sdl2;
