@@ -19,6 +19,12 @@ impl Default for Status {
     }
 }
 
+impl Status {
+    pub fn to_u8(&self) -> u8 {
+        self.bits
+    }
+}
+
 #[cfg(test)]
 mod test {
     use super::*;

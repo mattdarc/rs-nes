@@ -88,6 +88,7 @@ buildable!(CpuState; CpuStateBuilder {
     y: u8,
     pc: u16,
     sp: u8,
+    status: u8,
 
     // PPU
     scanline: usize,
@@ -150,6 +151,7 @@ impl<BusType: Bus> CPU<BusType> {
             y: self.y,
             pc: self.old_pc,
             sp: self.sp,
+            status: self.status.to_u8(),
             scanline,
             ppu_cycle,
         });
@@ -191,15 +193,16 @@ impl<BusType: Bus> CPU<BusType> {
         {
             let _enter = cpu_span.enter();
 
-            self.fetch_instruction();
-
-            #[cfg(feature = "nestest")]
-            self.save_cpu_state();
-
-            self.execute_instruction();
             if let Some(status) = self.bus.pop_nmi() {
                 event!(Level::INFO, NMI.status = status);
                 self.handle_nmi(status);
+            } else {
+                self.fetch_instruction();
+
+                #[cfg(feature = "nestest")]
+                self.save_cpu_state();
+
+                self.execute_instruction();
             }
         }
 
@@ -358,24 +361,24 @@ impl<BusType: Bus> CPU<BusType> {
     }
 
     fn do_branch(&mut self, dst: u8) {
-        // TODO: we can likely implement this as i8
-        let pc = if is_negative(dst) {
+        // FIXME: we can likely implement this as i8
+        let next_pc = if is_negative(dst) {
             self.pc.wrapping_sub(dst.wrapping_neg() as u16)
         } else {
             self.pc.wrapping_add(dst as u16)
         };
-        let crossed_page = crosses_page(self.pc, pc);
+        let crossed_page = crosses_page(self.pc, next_pc);
         event!(
             Level::INFO,
             "0x{:>4X}> branch taken -> {:#X} (cross page {})",
             self.pc,
-            pc,
+            next_pc,
             crossed_page
         );
 
         // Crossing a page adds an extra cycle
         self.cycles += 1 + crossed_page as u8;
-        self.pc = pc;
+        self.pc = next_pc;
     }
 
     fn peek(&mut self) -> u8 {

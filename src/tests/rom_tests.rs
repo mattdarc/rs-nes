@@ -101,6 +101,7 @@ impl NestestParser {
                     "X" => builder.x(value),
                     "Y" => builder.y(value),
                     "SP" => builder.sp(value),
+                    "P" => builder.status(value),
                     "A" => builder.acc(value),
                     name => {
                         event!(Level::DEBUG, "Unknown register {}: {}", name, value);
