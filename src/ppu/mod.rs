@@ -129,6 +129,7 @@ pub struct PPU {
     timestamp: time::Instant,
 
     fixme_written_addresses: std::collections::HashSet<usize>,
+    fixme_written_vram: std::collections::HashMap<u16, u8>,
 }
 
 fn to_u8_slice(x: u32) -> [u8; 4] {
@@ -163,15 +164,14 @@ fn mirror(mirror: &Mirroring, addr: u16) -> u16 {
 /// Convert the low and the high byte to the corresponding indices from [0,3]
 fn tile_lohi_to_idx(low: u8, high: u8) -> [u8; 8] {
     let mut color_idx = [0_u8; 8];
-    for i in 0..color_idx.len() as u8 {
-        color_idx[i as usize] = ((low >> (7 - i)) & 1) | (((high >> (7 - i)) & 1) << 1);
+    for i in (0..color_idx.len()).rev() {
+        color_idx[(7 - i) as usize] = ((low >> i) & 1) | (((high >> i) & 1) << 1);
     }
 
     color_idx
 }
 
 const PPU_VRAM_SIZE: u16 = 0x2000;
-const NAMETABLE_START: u16 = 0x2F00;
 impl PPU {
     pub fn new(cartridge: Cartridge, renderer: Box<dyn Renderer>) -> Self {
         let cartridge_header = cartridge.header();
@@ -195,6 +195,7 @@ impl PPU {
 
             vram: RAM::with_size(PPU_VRAM_SIZE),
             fixme_written_addresses: std::collections::HashSet::new(),
+            fixme_written_vram: std::collections::HashMap::new(),
             timestamp: time::Instant::now(),
         }
     }
@@ -232,8 +233,8 @@ impl PPU {
         };
 
         event!(
-            Level::DEBUG,
-            "ppu::register_read [{:#X}] (== {:#X})",
+            Level::INFO,
+            "ppu::register_read [{:#x}] (== {:#x})",
             addr,
             ret
         );
@@ -242,13 +243,6 @@ impl PPU {
     }
 
     pub fn register_write(&mut self, addr: u16, val: u8) {
-        event!(
-            Level::DEBUG,
-            "ppu::register_write [{:#X}] = {:#X}",
-            addr,
-            val
-        );
-
         match (addr - 0x2000) % 8 {
             // FIXME: After power/reset, writes to this register are ignored for about 30,000
             // cycles. Do we actually need to respect this?
@@ -258,7 +252,7 @@ impl PPU {
             3 => self.registers.oamaddr = val,
             4 => {
                 // For emulation purposes, it is probably best to completely ignore writes during
-                // rendering.
+                // rendering (but the address is still updated)
                 //
                 // https://www.nesdev.org/wiki/PPU_registers#OAMDATA
                 if self.scanline >= VISIBLE_SCANLINES {
@@ -270,6 +264,13 @@ impl PPU {
             6 => self.registers.addr.write(val),
             7 => {
                 let addr: u16 = self.ppu_addr_read();
+                event!(
+                    Level::INFO,
+                    "ppu::register_write (PPUDATA) [{:#x}] = {:#x}",
+                    addr,
+                    val
+                );
+
                 self.ppu_write(addr, val);
             }
             _ => unreachable!(),
@@ -303,6 +304,7 @@ impl PPU {
                     "[{}]> writing to VRAM *{:#x} = {:#x}",
                     self.cycle, vram_offset, val
                 );
+                self.fixme_written_vram.insert(vram_offset, val);
                 self.vram.write(vram_offset, val)
             }
 
@@ -332,7 +334,7 @@ impl PPU {
                 //     self.cycle, vram_offset, addr, val
                 // );
                 self.last_fetch = self.vram.read(vram_offset);
-                val
+                self.last_fetch
             }
 
             // $3F00-$3F1F: Palette RAM
@@ -443,16 +445,52 @@ impl PPU {
             self.cycle,
         );
 
-        let v = self.ppu_addr_read();
-        let fine_y = (v >> 12) & 0x7;
+        let tile_x = ((self.cycle - 1) / TILE_WIDTH_PX) as i16;
+        let tile_y = (self.scanline / TILE_HEIGHT_PX) as i16;
+
+        // FIXME: Since these are hard-coded numbers based on the address we skip these cycles for now
+        if tile_y > 29 || tile_x > 31 {
+            return;
+        }
+
+        // FIXME: replace
+        // let v = self.ppu_addr_read();
+        let v = (tile_x + tile_y * FRAME_WIDTH_TILES) as u16;
+        assert!(
+            v < 0x400,
+            "Bad address scanline={}, x={}, y={}, {:#04x}",
+            self.scanline,
+            tile_x,
+            tile_y,
+            v
+        );
+
         let nametable_addr: u16 = 0x2000 | (v & 0xFFF);
         let nametable_byte = self.ppu_read(nametable_addr);
+        if let Some(&value) = self.fixme_written_vram.get(&nametable_addr) {
+            assert_eq!(
+                nametable_byte, value,
+                "Value mismatch from write at {:#x}",
+                nametable_addr
+            );
+        }
 
         let attribute_addr = 0x23C0 | (v & 0x0C00) | ((v >> 4) & 0x38) | ((v >> 2) & 0x07);
         let attribute_byte = self.read_attr_table(attribute_addr);
 
         const HIGH_OFFSET_BYTES: u16 = 8; // The next bitplane for this tile
-        let pattable_addr = self.bg_table_base() | nametable_byte as u16 | fine_y;
+                                          // FIXME: let fine_y = (v >> 12) & 0x7;
+        const TILE_STRIDE_SHIFT: u16 = 4;
+        let fine_y = (self.scanline % TILE_HEIGHT_PX) as u16;
+        let tile_base = self.bg_table_base() | ((nametable_byte as u16) << TILE_STRIDE_SHIFT);
+        let pattable_addr = tile_base | fine_y;
+        if tile_base != 0x1240 {
+            println!(
+                "ADDR={:#X}, BASE={:#X}, BYTE={:#X}",
+                nametable_addr, tile_base, pattable_addr
+            );
+        }
+
         let pattern_lo = self.ppu_read(pattable_addr);
         let pattern_hi = self.ppu_read(pattable_addr + HIGH_OFFSET_BYTES);
 
@@ -461,6 +499,24 @@ impl PPU {
             pattern_lo,
             pattern_hi,
         };
+
+        if tile_base != 0x1240 {
+            // FIXME: Lets peek into which tile in the pattern table we're fetching. Each tile is 16
+            // bytes (each row is 2 bytes, 8 rows). We should be able to do this by basically neglecting fine-y
+            println!("TILE: ");
+            for offset in 0..8 {
+                let pattern_lo = self.ppu_read(tile_base + offset);
+                let pattern_hi = self.ppu_read(tile_base + HIGH_OFFSET_BYTES + offset);
+                for bit in 0..8 {
+                    print!(
+                        "{}",
+                        ((pattern_lo >> bit) & 1) | (((pattern_hi >> bit) & 1) << 1)
+                    );
+                }
+                println!();
+            }
+            println!();
+        }
     }
 
     fn tick_once(&mut self) {
@@ -473,6 +529,7 @@ impl PPU {
         //    scanlines. OAMADDR is set to 0 during each of ticks
 
         if self.cycle > 0 && (self.cycle - 1) % 8 == 0 {
+            // FIXME: NEXT: These fetches are for 2 tiles ahead
             self.do_tile_fetches();
         }
 
@@ -603,7 +660,7 @@ impl PPU {
 
         self.render_background(tile_x);
 
-        // self.render_sprites();
+        self.render_sprites();
     }
 
     fn palette_read(&mut self, mut addr: u16) -> u8 {

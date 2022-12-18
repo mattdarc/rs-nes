@@ -67,7 +67,7 @@ impl NesBus {
 }
 
 impl Bus for NesBus {
-    #[tracing::instrument(target = "bus", level = Level::DEBUG, skip(self), ret)]
+    #[tracing::instrument(target = "bus", level = Level::DEBUG, skip(self))]
     fn read(&mut self, addr: u16) -> u8 {
         // FIXME: *Could* make each of these components conform to a common interface which has
         // read/write register, but the NES is fixed HW so I don't see the benefit ATM
