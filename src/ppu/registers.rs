@@ -67,8 +67,8 @@ impl Default for PpuAddr {
 }
 
 impl PpuAddr {
-    const HORIZ_MASK: u16 = 0x041F;
-    const VERT_MASK: u16 = !PpuAddr::HORIZ_MASK;
+    const HORIZ_MASK: u16 = 0x001F;
+    const VERT_MASK: u16 = 0x03E0;
 
     pub fn addr_write(&mut self, val: u8) {
         match self.next_wr {
@@ -115,7 +115,7 @@ impl PpuAddr {
     pub fn incr_x(&mut self) {
         let old_addr = self.addr;
         if (self.addr & 0x001F) == 0x001F {
-            self.addr &= 0xFFE0;
+            self.addr &= !0x001F;
             self.addr ^= 0x0400;
         } else {
             self.addr += 1;
@@ -131,23 +131,22 @@ impl PpuAddr {
     pub fn incr_y(&mut self) {
         let old_addr = self.addr;
 
-        if (self.addr & 0x7000) == 0 {
+        if (self.addr & 0x7000) != 0x7000 {
             self.addr += 0x1000;
-            return;
-        }
-
-        self.addr &= !0x7000;
-        let mut coarse_y = (self.addr & PpuAddr::VERT_MASK) >> 5;
-        if coarse_y == 29 {
-            coarse_y = 0;
-            self.addr ^= 0x0800;
-        } else if coarse_y == 31 {
-            coarse_y = 0;
         } else {
-            coarse_y += 1;
-        }
+            self.addr &= !0x7000;
+            let mut y = (self.addr & PpuAddr::VERT_MASK) >> 5;
+            if y == 29 {
+                y = 0;
+                self.addr ^= 0x0800;
+            } else if y == 31 {
+                y = 0;
+            } else {
+                y += 1;
+            }
 
-        self.addr = (self.addr & !PpuAddr::VERT_MASK) | (coarse_y << 5);
+            self.addr = (self.addr & !PpuAddr::VERT_MASK) | (y << 5);
+        }
 
         // Updated the vertical component. Horizontal should be the same
         assert_eq!(
@@ -157,7 +156,7 @@ impl PpuAddr {
     }
 
     pub fn to_u16(self) -> u16 {
-        self.addr & 0x3FFF
+        self.addr & 0x7FFF
     }
 
     pub fn reset(&mut self) {

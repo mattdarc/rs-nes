@@ -222,10 +222,9 @@ impl PPU {
         if regnum == 7 {
             event!(
                 Level::DEBUG,
-                "[CYC:{}][SL:{}][BI:{}] ppu::register_write [{:#x}] VRAM({:#x}) = {:#x}",
+                "[CYC:{}][SL:{}] ppu::register_write [{:#x}] VRAM({:#x}) = {:#x}",
                 self.cycle,
                 self.scanline,
-                self.is_blanking(),
                 addr,
                 self.registers.addr.to_u16(),
                 val
@@ -463,22 +462,38 @@ impl PPU {
         assert!(!self.is_blanking());
         std::mem::swap(&mut self.current_tile, &mut self.next_tile);
 
+        event!(
+            Level::DEBUG,
+            "[CYC:{:<3}][SL:{:<3}] V({:#<04x}): (NT={:0X}, AT={:0X}, LO={:0X}, HI={:0X})",
+            self.cycle,
+            self.scanline,
+            self.registers.addr.to_u16(),
+            self.current_tile.nametable_byte,
+            self.current_tile.attribute_byte,
+            self.current_tile.pattern_lo,
+            self.current_tile.pattern_hi,
+        );
+    }
+
+    fn increment_vaddr(&mut self) {
+        return;
         match self.cycle {
             0 => { /* skipped */ }
             8 | 16 | 24 | 32 | 40 | 48 | 56 | 64 | 72 | 80 | 88 | 96 | 104 | 112 | 120 | 128
             | 136 | 144 | 152 | 160 | 168 | 176 | 184 | 192 | 200 | 208 | 216 | 224 | 232 | 240
-            | 248 => self.registers.addr.incr_x(),
+            | 248 | 328 | 336 => self.registers.addr.incr_x(),
             256 => {
                 self.registers.addr.incr_x();
                 self.registers.addr.incr_y();
             }
             257 => self.registers.addr.sync_x(),
-            280..=304 => self.registers.addr.sync_y(),
+            280..=304 => {
+                if self.scanline == -1 {
+                    self.registers.addr.sync_y();
+                }
+            }
             _ => {}
         }
-
-        // Last tile for the scanline
-        if self.cycle == 257 {}
     }
 
     fn do_tile_fetches(&mut self) {
@@ -486,7 +501,7 @@ impl PPU {
             return;
         }
 
-        match (self.cycle - 1) % 8 {
+        match self.cycle % 8 {
             0 => self.do_prepare_next_tile(),
             1 => self.do_nametable_fetch(),
             3 => self.do_attribute_fetch(),
@@ -514,8 +529,8 @@ impl PPU {
                     // updated. A possible cycle-accurate improvememt would be to do this fetch
                     // every 8 cycles but write the pixels every cycle. Not sure if we actually
                     // need to do this to get a workable game.
+                    self.do_visible_scanline();
                     self.last_tile = tile_x;
-                    self.do_visible_scanline(tile_x);
                 }
             }
             (0..240, 257..321) => self.evaluate_sprites(),
@@ -529,6 +544,8 @@ impl PPU {
 
             (scanline, cycle) => unreachable!("scanline={}, cycle={}", scanline, cycle),
         }
+
+        self.increment_vaddr();
 
         self.cycle += 1;
 
@@ -571,7 +588,7 @@ impl PPU {
         nmi
     }
 
-    fn do_visible_scanline(&mut self, _tile_x: i16) {
+    fn do_visible_scanline(&mut self) {
         // The value of OAMADDR when sprite evaluation starts at tick 65 of the visible scanlines
         // will determine where in OAM sprite evaluation starts, and hence which sprite gets
         // treated as sprite 0. The first OAM entry to be checked during sprite evaluation is the
@@ -588,11 +605,9 @@ impl PPU {
         // https://www.nesdev.org/wiki/PPU_sprite_evaluation
         self.update_sprite0_hit();
 
-        // FIXME:
-        // self.render_background(tile_x);
+        self.draw_background();
 
-        // FIXME
-        self.render_sprites();
+        self.draw_sprites();
     }
 
     fn palette_read(&mut self, mut addr: u16) -> u8 {
@@ -618,19 +633,10 @@ impl PPU {
         self.palette_table[(addr & 0x1F) as usize] = val;
     }
 
-    fn render_background(&mut self, tile_x: i16) {
-        let tile_y = self.scanline as usize / TILE_HEIGHT_PX as usize;
-        let tile_row = self.scanline as usize % TILE_HEIGHT_PX as usize;
-
-        event!(
-            Level::DEBUG,
-            "FRAME {}, SCANLINE {}> rendering background (x={}, y={}, r={})",
-            self.frame,
-            self.scanline,
-            tile_x,
-            tile_y,
-            tile_row
-        );
+    fn draw_background(&mut self) {
+        let tile_x = (self.cycle - 1) as usize / TILE_WIDTH_PX;
+        let tile_y = self.scanline as usize / TILE_HEIGHT_PX;
+        let tile_row = self.scanline as usize % TILE_HEIGHT_PX;
 
         let Tile {
             nametable_byte: _,
@@ -669,8 +675,10 @@ impl PPU {
             _ => unreachable!(),
         };
 
-        let base_addr = ((tile_y * TILE_HEIGHT_PX as usize + tile_row) * FRAME_WIDTH_PX as usize)
-            + tile_x as usize * TILE_WIDTH_PX as usize;
+        let base_addr = (((tile_y * TILE_HEIGHT_PX as usize + tile_row)
+            * FRAME_WIDTH_TILES as usize)
+            + tile_x as usize)
+            * TILE_WIDTH_PX as usize;
 
         // 0 is transparent, filter these out
         let color_idx = tile_lohi_to_idx(pattern_lo, pattern_hi);
@@ -819,7 +827,7 @@ impl PPU {
     }
 
     fn evaluate_sprites(&mut self) {}
-    fn render_sprites(&mut self) {}
+    fn draw_sprites(&mut self) {}
 
     fn render_frame(&mut self) {
         self.renderer.render_frame(
