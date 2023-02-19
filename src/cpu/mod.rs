@@ -544,10 +544,11 @@ impl<'a, BusType: Bus> CPU<'a, BusType> {
 
     fn add_with_carry_and_overflow(&mut self, a: u8, b: u8) -> u8 {
         let carry = self.status.contains(Status::CARRY);
-        let result = a.wrapping_add(b).wrapping_add(carry as u8);
+        let (result, carry1) = a.overflowing_add(b);
+        let (result, carry2) = result.overflowing_add(carry as u8);
 
         let overflow = (a ^ b) & 0x80 == 0 && (b ^ result) & 0x80 != 0;
-        let carry = ((a as u16) + (b as u16)) != (a + b) as u16;
+        let carry = carry1 || carry2;
 
         self.status.set(Status::OVERFLOW, overflow);
         self.status.set(Status::CARRY, carry);
