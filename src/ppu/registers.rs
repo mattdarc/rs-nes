@@ -69,6 +69,7 @@ impl Default for PpuAddr {
 impl PpuAddr {
     const HORIZ_MASK: u16 = 0x041F;
     const VERT_MASK: u16 = 0x0bE0;
+    const FINE_Y_MASK: u16 = 0x7000;
 
     pub fn addr_write(&mut self, val: u8) {
         match self.next_wr {
@@ -114,6 +115,7 @@ impl PpuAddr {
         self.addr += amt;
     }
 
+    // See https://www.nesdev.org/wiki/PPU_scrolling
     pub fn incr_x(&mut self) {
         let old_addr = self.addr;
         if (self.addr & 0x001F) == 0x001F {
@@ -170,6 +172,7 @@ impl PpuAddr {
     }
 
     pub fn sync_y(&mut self) {
-        self.addr = (self.tmp & PpuAddr::VERT_MASK) | (self.addr & !PpuAddr::VERT_MASK);
+        self.addr = (self.tmp & PpuAddr::VERT_MASK)
+            | (self.addr & !(PpuAddr::VERT_MASK | PpuAddr::FINE_Y_MASK));
     }
 }
