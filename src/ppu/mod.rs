@@ -408,9 +408,8 @@ impl PPU {
         // SW can set forced-blank mode, which disables all rendering and updates. This is used
         // typically during initialization
         let forced_blank = (self.registers.mask & (PpuMask::SHOW_BG | PpuMask::SHOW_SPRITES)) == 0;
-        let in_vblank = (self.registers.status & PpuStatus::VBLANK_STARTED) != 0;
-        let in_hblank = 257 < self.cycle && self.cycle < 328;
-        forced_blank || in_vblank || in_hblank
+        let in_vblank = self.scanline > VISIBLE_SCANLINES as i16;
+        forced_blank || in_vblank
     }
 
     fn clear_render_buffer(&mut self) {
@@ -474,7 +473,7 @@ impl PPU {
     }
 
     fn increment_vaddr(&mut self) {
-        return;
+        let prev_addr = self.registers.addr.to_u16();
         match self.cycle {
             0 => { /* skipped */ }
             8 | 16 | 24 | 32 | 40 | 48 | 56 | 64 | 72 | 80 | 88 | 96 | 104 | 112 | 120 | 128
@@ -492,13 +491,20 @@ impl PPU {
             }
             _ => {}
         }
+
+        if prev_addr != self.registers.addr.to_u16() {
+            event!(
+                Level::DEBUG,
+                "[CYC:{:<3}][SL:{:<3}] V({:#X}) ==> V({:#X})",
+                self.cycle,
+                self.scanline,
+                prev_addr,
+                self.registers.addr.to_u16(),
+            );
+        }
     }
 
     fn do_tile_fetches(&mut self) {
-        if self.cycle == 0 || self.is_blanking() {
-            return;
-        }
-
         match self.cycle % 8 {
             0 => self.do_prepare_next_tile(),
             1 => self.do_nametable_fetch(),
@@ -511,7 +517,9 @@ impl PPU {
     }
 
     fn tick_once(&mut self) {
-        self.do_tile_fetches();
+        if self.cycle != 0 && !self.is_blanking() {
+            self.do_tile_fetches();
+        }
 
         // https://www.nesdev.org/wiki/PPU_rendering
         match (self.scanline, self.cycle) {
@@ -543,7 +551,9 @@ impl PPU {
             (scanline, cycle) => unreachable!("scanline={}, cycle={}", scanline, cycle),
         }
 
-        self.increment_vaddr();
+        if self.cycle != 0 && !self.is_blanking() {
+            self.increment_vaddr();
+        }
 
         self.cycle += 1;
 
