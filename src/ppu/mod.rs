@@ -34,7 +34,7 @@ const FRAME_WIDTH_PX: usize = FRAME_WIDTH_TILES * TILE_WIDTH_PX;
 const FRAME_SIZE_BYTES: usize =
     PX_SIZE_BYTES * (FRAME_HEIGHT_PX as usize) * (FRAME_WIDTH_PX as usize);
 
-const PALETTE_TABLE: [u32; 64] = [
+const PALETTE_COLOR_LUT: [u32; 64] = [
     0x7C7C7C00, 0x0000FC00, 0x0000BC00, 0x4428BC00, 0x94008400, 0xA8002000, 0xA8100000, 0x88140000,
     0x50300000, 0x00780000, 0x00680000, 0x00580000, 0x00405800, 0x00000000, 0x00000000, 0x00000000,
     0xBCBCBC00, 0x0078F800, 0x0058F800, 0x6844FC00, 0xD800CC00, 0xE4005800, 0xF8380000, 0xE45C1000,
@@ -178,8 +178,14 @@ impl PPU {
             }
             3 => self.registers.oamaddr,
             4 => self.registers.oamdata,
-            5 => panic!("Cannot read PPU scroll!"),
-            6 => panic!("Cannot read PPU address!"),
+            5 => {
+                event!(Level::DEBUG, "garbage read from PPUSCROLL");
+                0x0
+            }
+            6 => {
+                event!(Level::DEBUG, "garbage read from PPUADDR");
+                0x0
+            }
             7 => {
                 let addr = self.registers.addr.to_u16();
                 self.ppudata_addr_incr();
@@ -673,7 +679,7 @@ impl PPU {
 
             let palette_addr = (d4 << 4) | (d3_d2 << 2) | lo;
             let color_idx = self.palette_read(palette_addr as u16);
-            let color = PALETTE_TABLE[color_idx as usize];
+            let color = PALETTE_COLOR_LUT[color_idx as usize];
 
             let buf_addr = PX_SIZE_BYTES * (base_addr + px);
             let render_slice = &mut self.frame_buf[buf_addr..(buf_addr + PX_SIZE_BYTES)];
@@ -724,7 +730,7 @@ impl PPU {
 
                     let palette_addr = (d3_d2 << 2) | lo;
                     let color_idx = self.palette_read(palette_addr as u16);
-                    let color = PALETTE_TABLE[color_idx as usize];
+                    let color = PALETTE_COLOR_LUT[color_idx as usize];
 
                     let buf_addr = PX_SIZE_BYTES * (base_addr_px + px);
                     let render_slice = &mut buf[buf_addr..(buf_addr + PX_SIZE_BYTES)];
