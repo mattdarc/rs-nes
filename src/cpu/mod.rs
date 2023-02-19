@@ -251,10 +251,16 @@ impl<'a, BusType: Bus> CPU<'a, BusType> {
     fn trace_instruction(&self) {
         let (scanline, ppu_cycle) = self.bus.ppu_state();
 
-        let mut operands_str = String::new();
-        for op in &self.operands {
-            operands_str.push_str(&format!("{:02X} ", op));
-        }
+        let operands_as_str = || {
+            // FIXME: This should be a stack-allocated string. In the hot loop like this we're
+            // waiting on malloc for most of the time
+            let mut operands_str = String::new();
+            for op in &self.operands {
+                operands_str.push_str(&format!("{:02X} ", op));
+            }
+
+            operands_str
+        };
 
         event!(
             Level::DEBUG,
@@ -262,7 +268,7 @@ impl<'a, BusType: Bus> CPU<'a, BusType> {
             self.instructions_executed,
             self.old_pc,
             self.instruction.opcode(),
-            operands_str,
+            operands_as_str(),
             self.instruction.name(),
             format!("{:?}", self.instruction.mode()),
             self.acc,

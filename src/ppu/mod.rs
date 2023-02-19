@@ -393,13 +393,15 @@ impl PPU {
 
         // FIXME: Would be cool to make these options that could be passed at startup, and updated
         // during runtime
-        self.show_nametable();
+        // self.show_nametable();
         // self.show_pattern_table();
-        // if self.rendering_enabled() {
-        //     // FIXME: This should be done on a line basis in do_visible_scanline
-        //     self.render_frame();
-        // }
-        self.clear_render_buffer();
+        if self.rendering_enabled() {
+            // FIXME: This should be done on a line basis in do_visible_scanline
+            self.render_frame();
+        }
+
+        // FIXME: add extra checks mode
+        // self.clear_render_buffer();
 
         std::thread::sleep(std::time::Duration::from_millis(16));
     }
@@ -701,7 +703,8 @@ impl PPU {
             let buf_addr = PX_SIZE_BYTES * (base_addr + px);
             let render_slice = &mut self.frame_buf[buf_addr..(buf_addr + PX_SIZE_BYTES)];
 
-            assert!(render_slice.iter().all(|&p| p == 0));
+            // FIXME: add extra checks mode
+            // assert!(render_slice.iter().all(|&p| p == 0));
             render_slice.copy_from_slice(&to_u8_slice(color));
         }
     }
