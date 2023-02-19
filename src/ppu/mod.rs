@@ -404,8 +404,8 @@ impl PPU {
     fn is_blanking(&self) -> bool {
         // SW can set forced-blank mode, which disables all rendering and updates. This is used
         // typically during initialization
-        let forced_blank = self.registers.status & (PpuMask::SHOW_BG | PpuMask::SHOW_SPRITES) == 0;
-        let in_vblank = self.registers.status & PpuStatus::VBLANK_STARTED != 0;
+        let forced_blank = (self.registers.mask & (PpuMask::SHOW_BG | PpuMask::SHOW_SPRITES)) == 0;
+        let in_vblank = (self.registers.status & PpuStatus::VBLANK_STARTED) != 0;
         let in_hblank = 257 < self.cycle && self.cycle < 328;
         forced_blank || in_vblank || in_hblank
     }
@@ -492,14 +492,6 @@ impl PPU {
     }
 
     fn tick_once(&mut self) {
-        // FIXME: Do I need to implement this behavior? SW could read this register (apparently
-        // Micro Machines does this)
-        //
-        //  * Cycles 1-64: Secondary OAM (32-byte buffer for current sprites on scanline) is
-        //    initialized to $FF - attempting to read $2004 will return $FF
-        //  * Cycles 257-320: (the sprite tile loading interval) of the pre-render and visible
-        //    scanlines. OAMADDR is set to 0 during each of ticks
-
         self.do_tile_fetches();
 
         // https://www.nesdev.org/wiki/PPU_rendering
@@ -698,7 +690,6 @@ impl PPU {
         for v in 0..FRAME_NUM_TILES {
             let nt_addr = NAMETABLE_BASE | v as u16;
             let nt_byte = self.ppu_internal_read(nt_addr) as u16;
-            // println!("BUF:{:#X}    BYTE:{:#X}", nt_addr, nt_byte);
 
             const TILE_STRIDE_SHIFT: u16 = 4;
             let tile_base = self.bg_table_base() | (nt_byte << TILE_STRIDE_SHIFT);
