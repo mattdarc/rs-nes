@@ -67,8 +67,8 @@ impl Default for PpuAddr {
 }
 
 impl PpuAddr {
-    const HORIZ_MASK: u16 = 0x001F;
-    const VERT_MASK: u16 = 0x03E0;
+    const HORIZ_MASK: u16 = 0x041F;
+    const VERT_MASK: u16 = 0x0bE0;
 
     pub fn addr_write(&mut self, val: u8) {
         match self.next_wr {
@@ -77,7 +77,7 @@ impl PpuAddr {
                 self.next_wr = AddrNextWrite::SecondWrite;
             }
             AddrNextWrite::SecondWrite => {
-                self.tmp = (self.tmp & 0xFF00) | val as u16;
+                self.tmp = (self.tmp & 0x7F00) | val as u16;
                 self.next_wr = AddrNextWrite::FirstWrite;
 
                 // Addresses written via PPUADDR are mirrored down to 0-0x3FFF
@@ -87,16 +87,17 @@ impl PpuAddr {
     }
 
     pub fn scroll_write(&mut self, val: u8) {
+        let val = val as u16;
         match self.next_wr {
             AddrNextWrite::FirstWrite => {
-                self.tmp = ((val as u16) >> 3) | (self.tmp & 0xFFE0);
-                self.fine_x = (val & 0x7) as u16;
+                self.tmp = (val >> 3) | (self.tmp & 0xFFE0);
+                self.fine_x = val & 0x7;
                 self.next_wr = AddrNextWrite::SecondWrite;
             }
             AddrNextWrite::SecondWrite => {
-                let fine_y = ((val as u16) & 0x7) << 12;
-                let coarse_y = ((val as u16) >> 3) << 5;
-                let nt_select = self.tmp & 0xC00;
+                let fine_y = (val & 0x7) << 12;
+                let coarse_y = (val >> 3) << 5;
+                let nt_select = (val & 0xC0) << 2;
                 self.tmp = fine_y | nt_select | coarse_y;
                 self.next_wr = AddrNextWrite::FirstWrite;
             }
@@ -136,7 +137,7 @@ impl PpuAddr {
             self.addr += 0x1000;
         } else {
             self.addr &= !0x7000;
-            let mut y = (self.addr & PpuAddr::VERT_MASK) >> 5;
+            let mut y = (self.addr & 0x3E0) >> 5;
             if y == 29 {
                 y = 0;
                 self.addr ^= 0x0800;
@@ -146,7 +147,7 @@ impl PpuAddr {
                 y += 1;
             }
 
-            self.addr = (self.addr & !PpuAddr::VERT_MASK) | (y << 5);
+            self.addr = (self.addr & !0x3E0) | (y << 5);
         }
 
         // Updated the vertical component. Horizontal should be the same

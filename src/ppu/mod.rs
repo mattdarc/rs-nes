@@ -359,6 +359,13 @@ impl PPU {
     }
 
     fn do_start_vblank(&mut self) {
+        event!(
+            Level::DEBUG,
+            "[CYC:{:<3}][SL:{:<3}] VBI",
+            self.cycle,
+            self.scanline,
+        );
+
         self.registers.status &= !PpuStatus::SPRITE_0_HIT;
         self.registers.status |= PpuStatus::VBLANK_STARTED;
         if self.registers.ctrl & PpuCtrl::NMI_ENABLE != 0 {
@@ -475,7 +482,7 @@ impl PPU {
         );
     }
 
-    fn increment_vaddr(&mut self) {
+    fn update_vaddr(&mut self) {
         let prev_addr = self.registers.addr.to_u16();
         match self.cycle {
             0 => { /* skipped */ }
@@ -483,8 +490,8 @@ impl PPU {
             | 136 | 144 | 152 | 160 | 168 | 176 | 184 | 192 | 200 | 208 | 216 | 224 | 232 | 240
             | 248 | 328 | 336 => self.registers.addr.incr_x(),
             256 => {
-                self.registers.addr.incr_x();
                 self.registers.addr.incr_y();
+                self.registers.addr.incr_x();
             }
             257 => self.registers.addr.sync_x(),
             280..=304 => {
@@ -508,6 +515,14 @@ impl PPU {
     }
 
     fn do_tile_fetches(&mut self) {
+        if self.cycle == 0 {
+            return;
+        }
+
+        // FIXME: A possible performance improvement would be to pre-allocate a scanline-size buffer
+        // for tiles where we could then render all at once. We could potentially do the tile fetches
+        // in one-shot as well. Would need to validate that this works with scrolling though before
+        // changing it
         match self.cycle % 8 {
             0 => self.do_prepare_next_tile(),
             1 => self.do_nametable_fetch(),
@@ -520,7 +535,7 @@ impl PPU {
     }
 
     fn tick_once(&mut self) {
-        if self.cycle != 0 && !self.is_blanking() {
+        if !self.is_blanking() {
             self.do_tile_fetches();
         }
 
@@ -532,6 +547,12 @@ impl PPU {
             // Visible scanlines (0-239)
             (0..240, 0) => { /* idle cycle */ }
             (0..240, 1..257) => {
+                // FIXME: Similar to do_tile_fetches, if we update that to use a tile-array then
+                // this becomes simpler since we can write one scanline at a time at the end of the
+                // frame. We could also dispatch another thread potentially for the rendering, resulting in a
+                //  -- Event thread for listening to user interactions
+                //  -- A NES thread for CPU, PPU, etc work
+                //  -- A rendering thread where we send only rendering data
                 let tile_x = (self.cycle - 1) / TILE_WIDTH_PX as i16;
                 if tile_x != self.last_tile {
                     // Render one tile at a time. This is how frequently the real hardware is
@@ -543,8 +564,7 @@ impl PPU {
                 }
             }
             (0..240, 257..321) => self.evaluate_sprites(),
-            (0..240, 321..337) => { /* FIXME: fetch first two tiles for the next frame */ }
-            (0..240, 337..342) => { /* FIXME: garbage nametable fetches */ }
+            (0..240, 321..342) => { /* garbage nametable fetches */ }
 
             (240, _) => { /* idle scanline */ }
 
@@ -554,8 +574,8 @@ impl PPU {
             (scanline, cycle) => unreachable!("scanline={}, cycle={}", scanline, cycle),
         }
 
-        if self.cycle != 0 && !self.is_blanking() {
-            self.increment_vaddr();
+        if !self.is_blanking() {
+            self.update_vaddr();
         }
 
         self.cycle += 1;
