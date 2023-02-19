@@ -6,6 +6,7 @@ use {
     crate::ExitStatus,
     instructions::Instruction,
     status::Status,
+    std::cell::RefCell,
     std::stringify,
     tracing::{event, span, Level},
 };
@@ -91,58 +92,22 @@ buildable!(CpuState; CpuStateBuilder {
     status: u8,
 
     // PPU
-    scanline: usize,
-    ppu_cycle: usize,
+    scanline: i16,
+    ppu_cycle: i16,
 });
 
-pub struct CPU<BusType: Bus> {
-    acc: u8,
-    x: u8,
-    y: u8,
-    old_pc: u16,
-    pc: u16,
-    sp: u8,
-    status: Status,
-    old_state: Option<CpuState>,
-    bus: BusType,
+pub type CpuTask<'a> = Box<dyn FnMut(&dyn CpuInterface) + 'a>;
+type TaskList<'a> = RefCell<Vec<CpuTask<'a>>>;
 
-    // FIXME: do I still need this?
-    // cache them in the NES for logging
-    operands: Vec<u8>,
-    instruction: Instruction,
-    cycles: u8,
-
-    exit_status: ExitStatus,
+pub trait CpuInterface {
+    fn read_state(&self) -> CpuState;
 }
 
-impl<BusType: Bus> CPU<BusType> {
-    pub fn new(bus: BusType) -> Self {
-        CPU {
-            acc: 0,
-            x: 0,
-            y: 0,
-            old_pc: 0,
-            pc: 0,
-            sp: 0xFD,
-            status: Status::empty(),
-            old_state: None,
-            bus,
-            instruction: Instruction::nop(),
-            exit_status: ExitStatus::Continue,
-            operands: Vec::new(),
-            cycles: 0,
-        }
-    }
-
-    pub fn pc(&self) -> u16 {
-        self.pc
-    }
-
-    #[cfg(feature = "nestest")]
-    fn save_cpu_state(&mut self) {
+impl<'a, BusType: Bus> CpuInterface for CPU<'a, BusType> {
+    fn read_state(&self) -> CpuState {
         let (scanline, ppu_cycle) = self.bus.ppu_state();
 
-        self.old_state = Some(CpuState {
+        CpuState {
             cycles: self.bus.cycles(),
             instruction: self.instruction,
             operands: self.operands.clone(),
@@ -154,14 +119,75 @@ impl<BusType: Bus> CPU<BusType> {
             status: self.status.to_u8(),
             scanline,
             ppu_cycle,
-        });
+        }
+    }
+}
+
+pub struct CPU<'a, BusType: Bus> {
+    bus: BusType,
+
+    acc: u8,
+    x: u8,
+    y: u8,
+    old_pc: u16,
+    pc: u16,
+    sp: u8,
+    status: Status,
+
+    operands: Vec<u8>,
+    instruction: Instruction,
+    cycles: u8,
+
+    instructions_executed: usize,
+    exit_status: ExitStatus,
+
+    pre_execute_tasks: TaskList<'a>,
+    post_execute_tasks: TaskList<'a>,
+}
+
+impl<'a, BusType: Bus> CPU<'a, BusType> {
+    pub fn new(bus: BusType) -> Self {
+        CPU {
+            bus,
+            acc: 0,
+            x: 0,
+            y: 0,
+            old_pc: 0,
+            pc: 0,
+            sp: 0xFD,
+            status: Status::empty(),
+            instruction: Instruction::nop(),
+            exit_status: ExitStatus::Continue,
+            operands: Vec::new(),
+            cycles: 0,
+            instructions_executed: 0,
+            pre_execute_tasks: TaskList::new(Vec::new()),
+            post_execute_tasks: TaskList::new(Vec::new()),
+        }
     }
 
-    #[cfg(feature = "nestest")]
-    pub fn state(&self) -> &CpuState {
-        self.old_state
-            .as_ref()
-            .expect("CPU has not run. There is no state")
+    pub fn add_pre_execute_task(&mut self, task: CpuTask<'a>) {
+        self.pre_execute_tasks.borrow_mut().push(task);
+    }
+
+    pub fn add_post_execute_task(&mut self, task: CpuTask<'a>) {
+        self.post_execute_tasks.borrow_mut().push(task);
+    }
+
+    fn run_pre_execute_tasks(&mut self) {
+        for task in self.pre_execute_tasks.borrow_mut().iter_mut() {
+            task(self);
+        }
+    }
+
+    fn run_post_execute_tasks(&mut self) {
+        for task in self.post_execute_tasks.borrow_mut().iter_mut() {
+            task(self);
+        }
+    }
+
+    pub fn pc(&self) -> u16 {
+        self.pc
     }
 
     pub fn nestest_reset_override(&mut self, pc: u16) {
@@ -194,15 +220,15 @@ impl<BusType: Bus> CPU<BusType> {
             let _enter = cpu_span.enter();
 
             if let Some(status) = self.bus.pop_nmi() {
-                event!(Level::INFO, NMI.status = status);
                 self.handle_nmi(status);
             } else {
                 self.fetch_instruction();
 
-                #[cfg(feature = "nestest")]
-                self.save_cpu_state();
-
+                self.run_pre_execute_tasks();
                 self.execute_instruction();
+                self.run_post_execute_tasks();
+
+                self.instructions_executed += 1;
             }
         }
 
@@ -222,6 +248,33 @@ impl<BusType: Bus> CPU<BusType> {
         event!(Level::TRACE, "IRQ: {:#04X}", self.pc);
     }
 
+    fn trace_instruction(&self) {
+        let (scanline, ppu_cycle) = self.bus.ppu_state();
+
+        let mut operands_str = String::new();
+        for op in &self.operands {
+            operands_str.push_str(&format!("{:02X} ", op));
+        }
+
+        event!(
+            Level::DEBUG,
+            "[{:>10}]  {:<04X}  {:<2X} {:<8} {:<4}  {:>10}  A:{:02X}  X:{:02X}  Y:{:02X}  P:{:02X}  SP:{:02X}  CYC:{:>3}  SL:{:>3}",
+            self.instructions_executed,
+            self.old_pc,
+            self.instruction.opcode(),
+            operands_str,
+            self.instruction.name(),
+            format!("{:?}", self.instruction.mode()),
+            self.acc,
+            self.x,
+            self.y,
+            self.status.bits(),
+            self.sp,
+            ppu_cycle,
+            scanline,
+        );
+    }
+
     fn fetch_instruction(&mut self) {
         let opcode = self.bus.read(self.pc);
         self.instruction = instructions::decode_instruction(opcode);
@@ -235,7 +288,6 @@ impl<BusType: Bus> CPU<BusType> {
             self.operands[i] = self.bus.read(self.pc + (i as u16) + 1);
         }
 
-        event!(Level::INFO, "{:#04x}> {:?}", self.pc, &self.instruction);
         self.old_pc = self.pc;
         self.pc += self.instruction.size();
     }
@@ -243,6 +295,9 @@ impl<BusType: Bus> CPU<BusType> {
     fn execute_instruction(&mut self) {
         use instructions::InstrName::*;
 
+        // FIXME: The address calculation and "real" operand decoding should be moved to before the
+        // fetch so we can print them
+        self.trace_instruction();
         match self.instruction.name() {
             // BRANCHES
             BPL => self.bpl(),
@@ -368,13 +423,6 @@ impl<BusType: Bus> CPU<BusType> {
             self.pc.wrapping_add(dst as u16)
         };
         let crossed_page = crosses_page(self.pc, next_pc);
-        event!(
-            Level::INFO,
-            "0x{:>4X}> branch taken -> {:#X} (cross page {})",
-            self.pc,
-            next_pc,
-            crossed_page
-        );
 
         // Crossing a page adds an extra cycle
         self.cycles += 1 + crossed_page as u8;
@@ -392,8 +440,7 @@ impl<BusType: Bus> CPU<BusType> {
     }
 
     // Update the CPU flags based on the accumulator
-    fn update_flags(&mut self, v: u8) {
-        // NOTE: anything greater than 127 is negative since it is a 2's complement format
+    fn update_nz(&mut self, v: u8) {
         self.status.set(Status::NEGATIVE, is_negative(v));
         self.status.set(Status::ZERO, v == 0);
     }
@@ -500,7 +547,7 @@ impl<BusType: Bus> CPU<BusType> {
         let result = a.wrapping_add(b).wrapping_add(carry as u8);
 
         let overflow = (a ^ b) & 0x80 == 0 && (b ^ result) & 0x80 != 0;
-        let carry = (carry && ((a | b) & 0x80 != 0)) || (a & b & 0x80 != 0);
+        let carry = ((a as u16) + (b as u16)) != (a + b) as u16;
 
         self.status.set(Status::OVERFLOW, overflow);
         self.status.set(Status::CARRY, carry);
@@ -585,12 +632,12 @@ impl<BusType: Bus> CPU<BusType> {
     fn adc(&mut self) {
         let operand = self.get_operand();
         self.acc = self.add_with_carry_and_overflow(self.acc, operand);
-        self.update_flags(self.acc);
+        self.update_nz(self.acc);
     }
 
     fn and(&mut self) {
         self.acc &= self.get_operand();
-        self.update_flags(self.acc);
+        self.update_nz(self.acc);
     }
 
     fn bit(&mut self) {
@@ -628,7 +675,7 @@ impl<BusType: Bus> CPU<BusType> {
         self.status.set(Status::CARRY, self.acc >= operand);
 
         let result = self.acc.wrapping_sub(operand);
-        self.update_flags(result);
+        self.update_nz(result);
     }
 
     fn cpx(&mut self) {
@@ -636,7 +683,7 @@ impl<BusType: Bus> CPU<BusType> {
         self.status.set(Status::CARRY, self.x >= operand);
 
         let result = self.x.wrapping_sub(operand);
-        self.update_flags(result);
+        self.update_nz(result);
     }
 
     fn cpy(&mut self) {
@@ -644,7 +691,7 @@ impl<BusType: Bus> CPU<BusType> {
         self.status.set(Status::CARRY, self.y >= operand);
 
         let result = self.y.wrapping_sub(operand);
-        self.update_flags(result);
+        self.update_nz(result);
     }
 
     fn dec(&mut self) {
@@ -652,45 +699,44 @@ impl<BusType: Bus> CPU<BusType> {
         let result = self.bus.read(addr).wrapping_sub(1);
 
         self.bus.write(addr, result);
-        self.update_flags(result);
+        self.update_nz(result);
     }
 
     fn dex(&mut self) {
         self.x = self.x.wrapping_sub(1);
-        self.update_flags(self.x);
+        self.update_nz(self.x);
     }
 
     fn dey(&mut self) {
         self.y = self.y.wrapping_sub(1);
-        self.update_flags(self.y);
+        self.update_nz(self.y);
     }
 
     fn eor(&mut self) {
         let operand = self.get_operand();
         self.acc ^= operand;
-        self.update_flags(self.acc);
+        self.update_nz(self.acc);
     }
 
     fn inc(&mut self) {
         let addr = self.calc_addr();
         let result = self.bus.read(addr).wrapping_add(1);
         self.bus.write(addr, result);
-        self.update_flags(result);
+        self.update_nz(result);
     }
 
     fn inx(&mut self) {
         self.x = self.x.wrapping_add(1);
-        self.update_flags(self.x);
+        self.update_nz(self.x);
     }
 
     fn iny(&mut self) {
         self.y = self.y.wrapping_add(1);
-        self.update_flags(self.y);
+        self.update_nz(self.y);
     }
 
     fn jmp(&mut self) {
         let addr = self.calc_addr();
-        event!(Level::INFO, "{:#04X}> JMP -> {:#04X}", self.pc, TO = addr);
         self.pc = addr;
     }
 
@@ -698,28 +744,25 @@ impl<BusType: Bus> CPU<BusType> {
         let pc = self.pc - 1;
         self.push16(pc);
         self.pc = ((self.operands[1] as u16) << 8) | (self.operands[0] as u16);
-        event!(Level::INFO, "{:#04X}> JSR -> {:#04X}", pc, TO = self.pc);
     }
 
     fn rts(&mut self) {
-        let pc = self.pc;
         self.pc = self.pop16() + 1;
-        event!(Level::INFO, "{:#04X}> RTS -> {:#04X}", pc, TO = self.pc);
     }
 
     fn lda(&mut self) {
         self.acc = self.get_operand();
-        self.update_flags(self.acc);
+        self.update_nz(self.acc);
     }
 
     fn ldx(&mut self) {
         self.x = self.get_operand();
-        self.update_flags(self.x);
+        self.update_nz(self.x);
     }
 
     fn ldy(&mut self) {
         self.y = self.get_operand();
-        self.update_flags(self.y);
+        self.update_nz(self.y);
     }
 
     fn lsr(&mut self) {
@@ -729,7 +772,7 @@ impl<BusType: Bus> CPU<BusType> {
         let shift = operand >> 1;
 
         self.write_memory(addr, shift);
-        self.update_flags(shift);
+        self.update_nz(shift);
     }
 
     fn asl(&mut self) {
@@ -739,7 +782,7 @@ impl<BusType: Bus> CPU<BusType> {
         let shift = operand << 1;
 
         self.write_memory(addr, shift);
-        self.update_flags(shift);
+        self.update_nz(shift);
     }
 
     fn nop(&mut self) {
@@ -751,7 +794,7 @@ impl<BusType: Bus> CPU<BusType> {
 
     fn ora(&mut self) {
         self.acc |= self.get_operand();
-        self.update_flags(self.acc);
+        self.update_nz(self.acc);
     }
 
     fn pha(&mut self) {
@@ -760,7 +803,7 @@ impl<BusType: Bus> CPU<BusType> {
 
     fn pla(&mut self) {
         self.acc = self.pop8();
-        self.update_flags(self.acc);
+        self.update_nz(self.acc);
     }
 
     fn php(&mut self) {
@@ -771,12 +814,6 @@ impl<BusType: Bus> CPU<BusType> {
         self.status =
             Status::from_bits(self.pop8() & !Status::BRK.bits() | Status::PUSH_IRQ.bits())
                 .expect("All bits are covered in Status");
-        event!(
-            Level::INFO,
-            "{:#>4}> STATUS {:X}",
-            self.pc,
-            self.status.bits()
-        );
     }
 
     fn rol(&mut self) {
@@ -787,7 +824,7 @@ impl<BusType: Bus> CPU<BusType> {
         let shift = (operand << 1) | (carry as u8);
 
         self.write_memory(addr, shift);
-        self.update_flags(shift);
+        self.update_nz(shift);
     }
 
     fn ror(&mut self) {
@@ -798,7 +835,7 @@ impl<BusType: Bus> CPU<BusType> {
         let shift = (operand >> 1) | ((carry as u8) << 7);
 
         self.write_memory(addr, shift);
-        self.update_flags(shift);
+        self.update_nz(shift);
     }
 
     fn rti(&mut self) {
@@ -809,7 +846,7 @@ impl<BusType: Bus> CPU<BusType> {
     fn sbc(&mut self) {
         let operand = self.get_operand();
         self.acc = self.sub_with_carry_and_overflow(self.acc, operand);
-        self.update_flags(self.acc);
+        self.update_nz(self.acc);
     }
 
     fn sec(&mut self) {
@@ -841,22 +878,22 @@ impl<BusType: Bus> CPU<BusType> {
 
     fn tax(&mut self) {
         self.x = self.acc;
-        self.update_flags(self.x);
+        self.update_nz(self.x);
     }
 
     fn tay(&mut self) {
         self.y = self.acc;
-        self.update_flags(self.y);
+        self.update_nz(self.y);
     }
 
     fn tsx(&mut self) {
         self.x = self.sp;
-        self.update_flags(self.x);
+        self.update_nz(self.x);
     }
 
     fn txa(&mut self) {
         self.acc = self.x;
-        self.update_flags(self.acc);
+        self.update_nz(self.acc);
     }
 
     fn txs(&mut self) {
@@ -865,7 +902,7 @@ impl<BusType: Bus> CPU<BusType> {
 
     fn tya(&mut self) {
         self.acc = self.y;
-        self.update_flags(self.acc);
+        self.update_nz(self.acc);
     }
 
     // Illegal instructions
@@ -878,7 +915,7 @@ impl<BusType: Bus> CPU<BusType> {
 
         self.acc &= operand;
         self.bus.write(addr, shift);
-        self.update_flags(shift);
+        self.update_nz(shift);
     }
 
     // TODO this doesn't seem right
@@ -891,7 +928,7 @@ impl<BusType: Bus> CPU<BusType> {
 
         self.acc &= operand;
         self.bus.write(addr, shift);
-        self.update_flags(self.acc);
+        self.update_nz(self.acc);
     }
 
     fn ane(&mut self) {
@@ -908,7 +945,7 @@ impl<BusType: Bus> CPU<BusType> {
 
         self.acc &= operand;
         self.bus.write(addr, result);
-        self.update_flags(self.acc);
+        self.update_nz(self.acc);
     }
 
     fn dcp(&mut self) {
@@ -917,7 +954,7 @@ impl<BusType: Bus> CPU<BusType> {
         self.bus.write(addr, dec);
 
         let result = self.acc.wrapping_sub(dec);
-        self.update_flags(result);
+        self.update_nz(result);
         self.status.set(Status::CARRY, self.acc >= dec);
     }
 
@@ -926,7 +963,7 @@ impl<BusType: Bus> CPU<BusType> {
         let result = self.bus.read(addr).wrapping_add(1);
         self.bus.write(addr, result);
         self.acc = self.sub_with_carry_and_overflow(self.acc, result);
-        self.update_flags(self.acc);
+        self.update_nz(self.acc);
     }
 
     fn las(&mut self) {
@@ -934,7 +971,7 @@ impl<BusType: Bus> CPU<BusType> {
 
         self.acc = operand;
         self.x = self.sp;
-        self.update_flags(self.x);
+        self.update_nz(self.x);
     }
 
     fn lax(&mut self) {
@@ -943,7 +980,7 @@ impl<BusType: Bus> CPU<BusType> {
 
         self.acc = operand;
         self.x = operand;
-        self.update_flags(self.acc);
+        self.update_nz(self.acc);
     }
 
     fn lxa(&mut self) {
@@ -960,7 +997,7 @@ impl<BusType: Bus> CPU<BusType> {
 
         self.bus.write(addr, shift);
         self.acc &= shift;
-        self.update_flags(self.acc);
+        self.update_nz(self.acc);
     }
 
     fn rra(&mut self) {
@@ -974,7 +1011,7 @@ impl<BusType: Bus> CPU<BusType> {
         self.bus.write(addr, shift);
 
         self.acc = self.add_with_carry_and_overflow(self.acc, shift);
-        self.update_flags(self.acc);
+        self.update_nz(self.acc);
     }
 
     fn sax(&mut self) {
@@ -988,7 +1025,7 @@ impl<BusType: Bus> CPU<BusType> {
         let ax = self.acc & self.x;
 
         self.x = ax - operand;
-        self.update_flags(self.x);
+        self.update_nz(self.x);
     }
 
     fn sha(&mut self) {
@@ -1018,7 +1055,7 @@ impl<BusType: Bus> CPU<BusType> {
         self.bus.write(addr, shift);
 
         self.acc |= shift;
-        self.update_flags(self.acc);
+        self.update_nz(self.acc);
     }
 
     fn sre(&mut self) {
@@ -1029,7 +1066,7 @@ impl<BusType: Bus> CPU<BusType> {
         self.bus.write(addr, shift);
 
         self.acc ^= shift;
-        self.update_flags(self.acc);
+        self.update_nz(self.acc);
     }
 
     fn tas(&mut self) {

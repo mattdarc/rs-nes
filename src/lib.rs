@@ -22,7 +22,7 @@ use cpu::*;
 use crossbeam::thread::scope;
 
 pub type NesBus = bus::NesBus;
-pub type NesCPU = CPU<NesBus>;
+pub type NesCPU<'a> = CPU<'a, NesBus>;
 
 #[derive(Debug)]
 pub enum NesError {
@@ -38,15 +38,15 @@ pub enum ExitStatus {
     ExitError(String),
 }
 
-pub struct VNES {
-    cpu: cpu::CPU<bus::NesBus>,
+pub struct VNES<'a> {
+    cpu: cpu::CPU<'a, bus::NesBus>,
 }
 
 type NesResult = Result<(), String>;
 
-unsafe impl Send for VNES {}
+unsafe impl<'a> Send for VNES<'a> {}
 
-impl VNES {
+impl<'a> VNES<'a> {
     pub fn new(rom: &str) -> std::io::Result<Self> {
         let game = Cartridge::load(rom)?;
         let bus = NesBus::new(game, Box::new(graphics::sdl2::SDLRenderer::new()));
@@ -59,9 +59,12 @@ impl VNES {
         Ok(VNES { cpu: CPU::new(bus) })
     }
 
-    #[cfg(feature = "nestest")]
-    pub fn state(&self) -> &cpu::CpuState {
-        return self.cpu.state();
+    pub fn add_pre_execute_task(&mut self, task: CpuTask<'a>) {
+        self.cpu.add_pre_execute_task(task);
+    }
+
+    pub fn add_post_execute_task(&mut self, task: CpuTask<'a>) {
+        self.cpu.add_post_execute_task(task);
     }
 
     pub fn nestest_reset_override(&mut self, pc: u16) {

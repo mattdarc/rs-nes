@@ -42,7 +42,7 @@ pub enum AddressingMode {
     Implied,     // 1 byte
 }
 
-#[derive(Copy, Clone, PartialEq, Eq)]
+#[derive(Copy, Clone, PartialEq, Eq, Debug)]
 pub enum InstrName {
     // CC == 0b01
     ORA,
@@ -136,7 +136,7 @@ pub enum InstrName {
     ILLEGAL_SHX,
 }
 
-impl std::fmt::Debug for InstrName {
+impl std::fmt::Display for InstrName {
     fn fmt(&self, fmt: &mut std::fmt::Formatter<'_>) -> Result<(), std::fmt::Error> {
         use InstrName::*;
         fmt.write_str(match self {
@@ -233,8 +233,10 @@ pub struct Instruction {
 impl std::fmt::Display for Instruction {
     fn fmt(&self, f: &mut std::fmt::Formatter) -> std::fmt::Result {
         f.write_str(&format!(
-            "0x{:X}: {:?} <{:?}>",
-            self.opcode, self.name, self.mode
+            "{:#<02X}:  {:<5}  {:<20}",
+            self.opcode,
+            format!("{:?}", self.name),
+            format!("<{:?}>", self.mode),
         ))
     }
 }

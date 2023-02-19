@@ -3,7 +3,7 @@ use regex::Regex;
 use tracing::{event, Level};
 use venus::VNES;
 use venus::{
-    cpu::{instructions::Instruction, CpuState, CpuStateBuilder},
+    cpu::{instructions::Instruction, CpuInterface, CpuState, CpuStateBuilder},
     ExitStatus,
 };
 
@@ -127,11 +127,17 @@ fn nestest() {
     const NESTEST_AUTOMATED_START: u16 = 0xC000;
     nes.nestest_reset_override(NESTEST_AUTOMATED_START);
 
-    for s in nestest_state.cpu_states.iter() {
+    let num_states = nestest_state.cpu_states.len();
+
+    let mut i = 0;
+    nes.add_pre_execute_task(Box::new(move |cpu: &dyn CpuInterface| {
+        assert_eq!(cpu.read_state(), nestest_state.cpu_states[i]);
+        i += 1;
+    }));
+
+    for _ in 0..num_states {
         if nes.run_once() != ExitStatus::Continue {
             panic!();
         }
-
-        assert_eq!(nes.state(), s);
     }
 }

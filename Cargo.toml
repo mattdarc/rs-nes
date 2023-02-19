@@ -16,7 +16,6 @@ harness = false
 [[test]]
 name = "rom_tests"
 path = "src/tests/rom_tests.rs"
-required-features = ["nestest"]
 
 [[test]]
 name = "ppu_tests"

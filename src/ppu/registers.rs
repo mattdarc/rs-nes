@@ -31,63 +31,6 @@ impl PpuStatus {
     pub const PREV_LSB: u8 = 0x1F;
 }
 
-#[derive(Eq, PartialEq)]
-enum ScrollNextWrite {
-    X,
-    Y,
-}
-
-impl Default for ScrollNextWrite {
-    fn default() -> Self {
-        ScrollNextWrite::X
-    }
-}
-
-#[derive(Default)]
-pub struct PpuScroll {
-    x: u8,
-    y: u8,
-    next_y: Option<u8>,
-    next_wr: ScrollNextWrite,
-}
-
-impl PpuScroll {
-    pub fn update_y_latch(&mut self) {
-        if let Some(y) = self.next_y {
-            self.y = y;
-        }
-
-        self.next_y = None;
-    }
-
-    pub fn reset_addr(&mut self) {
-        self.next_wr = ScrollNextWrite::X;
-    }
-
-    // Changes made to the vertical scroll during rendering will only take effect on the next
-    // frame. Always updating the value at frame end should be sufficient
-    pub fn write(&mut self, val: u8) {
-        match self.next_wr {
-            ScrollNextWrite::X => {
-                self.x = val;
-                self.next_wr = ScrollNextWrite::Y;
-            }
-            ScrollNextWrite::Y => {
-                self.next_y = Some(val);
-                self.next_wr = ScrollNextWrite::X;
-            }
-        }
-    }
-
-    pub fn x(&self) -> u8 {
-        self.x
-    }
-
-    pub fn y(&self) -> u8 {
-        self.y
-    }
-}
-
 #[derive(Default)]
 pub struct Registers {
     pub ctrl: u8,
@@ -95,54 +38,136 @@ pub struct Registers {
     pub status: u8,
     pub oamaddr: u8,
     pub oamdata: u8,
-    pub scroll: PpuScroll,
     pub addr: PpuAddr,
 }
 
 #[derive(Eq, PartialEq, Clone, Copy, Debug)]
 enum AddrNextWrite {
-    Hi,
-    Lo,
+    FirstWrite,
+    SecondWrite,
 }
 
 #[derive(Clone, Copy, Debug)]
 pub struct PpuAddr {
+    tmp: u16,
     addr: u16,
+    fine_x: u16,
     next_wr: AddrNextWrite,
 }
 
 impl Default for PpuAddr {
     fn default() -> Self {
         PpuAddr {
+            tmp: 0,
             addr: 0,
-            next_wr: AddrNextWrite::Hi,
+            fine_x: 0,
+            next_wr: AddrNextWrite::FirstWrite,
         }
     }
 }
 
 impl PpuAddr {
-    pub fn write(&mut self, val: u8) {
+    const HORIZ_MASK: u16 = 0x041F;
+    const VERT_MASK: u16 = !PpuAddr::HORIZ_MASK;
+
+    pub fn addr_write(&mut self, val: u8) {
         match self.next_wr {
-            AddrNextWrite::Hi => {
-                self.addr = ((val as u16) << 8) | (self.addr & 0xFF);
-                self.next_wr = AddrNextWrite::Lo;
+            AddrNextWrite::FirstWrite => {
+                self.tmp = ((val as u16) << 8) | (self.tmp & 0xFF);
+                self.next_wr = AddrNextWrite::SecondWrite;
             }
-            AddrNextWrite::Lo => {
-                self.addr = (self.addr & 0xFF00) | val as u16;
-                self.next_wr = AddrNextWrite::Hi;
+            AddrNextWrite::SecondWrite => {
+                self.tmp = (self.tmp & 0xFF00) | val as u16;
+                self.addr = self.tmp;
+                self.next_wr = AddrNextWrite::FirstWrite;
             }
         }
     }
 
+    pub fn scroll_write(&mut self, val: u8) {
+        match self.next_wr {
+            AddrNextWrite::FirstWrite => {
+                self.tmp = ((val as u16) >> 3) | (self.tmp & 0xFFE0);
+                self.fine_x = (val & 0x7) as u16;
+                self.next_wr = AddrNextWrite::SecondWrite;
+            }
+            AddrNextWrite::SecondWrite => {
+                let fine_y = ((val as u16) & 0x7) << 12;
+                let coarse_y = ((val as u16) >> 3) << 5;
+                let nt_select = self.tmp & 0xC00;
+                self.tmp = fine_y | nt_select | coarse_y;
+                self.next_wr = AddrNextWrite::FirstWrite;
+            }
+        }
+    }
+
+    pub fn set_nametable(&mut self, ctrl: u8) {
+        let addr_nt_mask = (PpuCtrl::NAMETABLE_ADDR as u16) << 10;
+        let nt_base = (ctrl & PpuCtrl::NAMETABLE_ADDR) as u16;
+        self.tmp = (self.tmp & !addr_nt_mask) | (nt_base << 10);
+    }
+
     pub fn incr(&mut self, amt: u16) {
-        self.addr = self.addr.wrapping_add(amt) & 0x3FFF;
+        self.addr += amt;
+    }
+
+    pub fn incr_x(&mut self) {
+        let old_addr = self.addr;
+        if (self.addr & 0x001F) == 0x001F {
+            self.addr &= 0xFFE0;
+            self.addr ^= 0x0400;
+        } else {
+            self.addr += 1;
+        }
+
+        // Updated the horizontal component. Vertical should be the same
+        assert_eq!(
+            self.addr & PpuAddr::VERT_MASK,
+            old_addr & PpuAddr::VERT_MASK
+        )
+    }
+
+    pub fn incr_y(&mut self) {
+        let old_addr = self.addr;
+
+        if (self.addr & 0x7000) == 0 {
+            self.addr += 0x1000;
+            return;
+        }
+
+        self.addr &= !0x7000;
+        let mut coarse_y = (self.addr & PpuAddr::VERT_MASK) >> 5;
+        if coarse_y == 29 {
+            coarse_y = 0;
+            self.addr ^= 0x0800;
+        } else if coarse_y == 31 {
+            coarse_y = 0;
+        } else {
+            coarse_y += 1;
+        }
+
+        self.addr = (self.addr & !PpuAddr::VERT_MASK) | (coarse_y << 5);
+
+        // Updated the vertical component. Horizontal should be the same
+        assert_eq!(
+            self.addr & PpuAddr::HORIZ_MASK,
+            old_addr & PpuAddr::HORIZ_MASK
+        )
     }
 
     pub fn to_u16(self) -> u16 {
         self.addr & 0x3FFF
     }
 
-    pub fn reset_addr(&mut self) {
-        self.next_wr = AddrNextWrite::Hi;
+    pub fn reset(&mut self) {
+        self.next_wr = AddrNextWrite::FirstWrite;
+    }
+
+    pub fn sync_x(&mut self) {
+        self.addr = (self.tmp & PpuAddr::HORIZ_MASK) | (self.addr & !PpuAddr::HORIZ_MASK);
+    }
+
+    pub fn sync_y(&mut self) {
+        self.addr = (self.tmp & PpuAddr::VERT_MASK) | (self.addr & !PpuAddr::VERT_MASK);
     }
 }
