@@ -19,9 +19,10 @@ fn init_tracing() {
             .with_file(false) // No file name in output
             .compact()
             .with_filter(tracing_subscriber::filter::filter_fn(|metadata| {
+                // FIXME: Make this a runtime-decision with an argument parser
                 (metadata.target() == format!("venus::{}", DEBUG_COMPONENT)
                     || metadata.target() == "venus::ppu")
-                    && metadata.level() <= &Level::DEBUG
+                    && metadata.level() <= &Level::INFO
             }))
             .boxed(),
     ); // use the `Compact` formatting style.
@@ -34,6 +35,7 @@ fn init_tracing() {
 fn main() -> Result<(), String> {
     init_tracing();
 
+    // FIXME: Make this a runtime-decision with an argument parser
     let mut vnes = VNES::new("roms/mario-bros.nes").unwrap();
     vnes.reset();
     let res = vnes.play();
