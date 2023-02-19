@@ -77,11 +77,10 @@ pub struct PPU {
     last_tile: i16,
     current_tile: Tile,
     next_tile: Tile,
+    ppudata_buffer: u8,
 
     palette_table: [u8; 32],
 
-    // Requires a dummy read to push out this value
-    last_fetch: u8,
     timestamp: time::Instant,
 
     fixme_written_addresses: std::collections::HashSet<usize>,
@@ -150,7 +149,7 @@ impl PPU {
             last_tile: 0,
             current_tile: Tile::default(),
             next_tile: Tile::default(),
-            last_fetch: 0,
+            ppudata_buffer: 0,
 
             vram: RAM::with_size(PPU_VRAM_SIZE),
             fixme_written_addresses: std::collections::HashSet::new(),
@@ -184,7 +183,18 @@ impl PPU {
             7 => {
                 let addr = self.registers.addr.to_u16();
                 self.ppudata_addr_incr();
-                self.ppu_internal_read(addr)
+
+                let mut val = self.ppu_internal_read(addr);
+                // Access to all memory except the palettes will return the contents of the
+                // internal buffer. However the content of the buffer is the content of the
+                // nametable "underneath" the palette table if the palette is read. This buffer is
+                // only updated on reads of PPUDATA
+                if addr < 0x3F00 {
+                    std::mem::swap(&mut self.ppudata_buffer, &mut val);
+                } else {
+                    self.ppudata_buffer = self.ppu_internal_read(addr & 0x2FFF);
+                }
+                val
             }
             _ => unreachable!(),
         };
