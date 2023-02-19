@@ -2,7 +2,7 @@ use tracing::Level;
 use tracing_subscriber::{fmt, prelude::*, Layer};
 use venus::VNES;
 
-const DEBUG_COMPONENT: &'static str = "cpu";
+const DEBUG_COMPONENT: &'static str = "ppu";
 
 fn init_tracing() {
     let mut layers = Vec::new();
@@ -21,7 +21,7 @@ fn init_tracing() {
             .with_filter(tracing_subscriber::filter::filter_fn(|metadata| {
                 (metadata.target() == format!("venus::{}", DEBUG_COMPONENT)
                     || metadata.target() == "venus::ppu")
-                    && metadata.level() <= &Level::INFO
+                    && metadata.level() <= &Level::DEBUG
             }))
             .boxed(),
     ); // use the `Compact` formatting style.

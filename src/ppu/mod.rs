@@ -82,8 +82,6 @@ pub struct PPU {
     palette_table: [u8; 32],
 
     timestamp: time::Instant,
-
-    fixme_written_addresses: std::collections::HashSet<usize>,
 }
 
 const WHITE: [u8; 4] = [0xff; 4];
@@ -152,7 +150,6 @@ impl PPU {
             ppudata_buffer: 0,
 
             vram: RAM::with_size(PPU_VRAM_SIZE),
-            fixme_written_addresses: std::collections::HashSet::new(),
             timestamp: time::Instant::now(),
         }
     }
@@ -393,10 +390,11 @@ impl PPU {
         self.flags.has_nmi = false;
         self.flags.odd = !self.flags.odd;
         self.oam_secondary.clear();
-        self.fixme_written_addresses.clear();
 
+        // FIXME: Would be cool to make these options that could be passed at startup, and updated
+        // during runtime
         self.show_nametable();
-        //self.show_pattern_table();
+        // self.show_pattern_table();
         // if self.rendering_enabled() {
         //     // FIXME: This should be done on a line basis in do_visible_scanline
         //     self.render_frame();
