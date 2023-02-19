@@ -77,10 +77,11 @@ impl PpuAddr {
                 self.next_wr = AddrNextWrite::SecondWrite;
             }
             AddrNextWrite::SecondWrite => {
-                // Addresses written via PPUADDR are mirrored down to 0-0x3FFF
-                self.tmp = (self.tmp & 0x3F00) | val as u16;
-                self.addr = self.tmp;
+                self.tmp = (self.tmp & 0xFF00) | val as u16;
                 self.next_wr = AddrNextWrite::FirstWrite;
+
+                // Addresses written via PPUADDR are mirrored down to 0-0x3FFF
+                self.addr = self.tmp & 0x3FFF;
             }
         }
     }

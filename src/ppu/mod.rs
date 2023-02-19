@@ -419,8 +419,9 @@ impl PPU {
     }
 
     fn do_nametable_fetch(&mut self) {
-        let v = self.registers.addr.to_u16();
-        self.next_tile.nametable_byte = self.ppu_internal_read(v);
+        // Upper bits are the fine_y scrolling
+        let nt_addr = 0x2000 | (self.registers.addr.to_u16() & 0xFFF);
+        self.next_tile.nametable_byte = self.ppu_internal_read(nt_addr);
     }
 
     fn do_attribute_fetch(&mut self) {
