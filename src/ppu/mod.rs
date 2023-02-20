@@ -47,6 +47,7 @@ const PALETTE_COLOR_LUT: [u32; 64] = [
 
 #[derive(Default)]
 struct Tile {
+    number: usize,
     nametable_byte: u8,
     attribute_byte: u8,
     pattern_lo: u8,
@@ -429,8 +430,10 @@ impl PPU {
 
     fn do_nametable_fetch(&mut self) {
         // Upper bits are the fine_y scrolling
-        let nt_addr = 0x2000 | (self.registers.addr.to_u16() & 0xFFF);
-        self.next_tile.nametable_byte = self.ppu_internal_read(nt_addr);
+        let tile_addr = self.registers.addr.to_u16() & 0xFFF;
+
+        self.next_tile.number = (tile_addr % 960) as usize;
+        self.next_tile.nametable_byte = self.ppu_internal_read(0x2000 | tile_addr);
     }
 
     fn do_attribute_fetch(&mut self) {
@@ -471,10 +474,11 @@ impl PPU {
 
         event!(
             Level::DEBUG,
-            "[CYC:{:<3}][SL:{:<3}] V({:#<04x}): (NT={:0X}, ATTR={:0X}, LO={:0X}, HI={:0X})",
+            "[CYC:{:<3}][SL:{:<3}] TILE:{:X} V({:#<04X}): (NT={:0X}, ATTR={:0X}, LO={:0X}, HI={:0X})",
             self.cycle,
             self.scanline,
             self.registers.addr.to_u16(),
+            self.current_tile.number,
             self.current_tile.nametable_byte,
             self.current_tile.attribute_byte,
             self.current_tile.pattern_lo,
@@ -666,11 +670,8 @@ impl PPU {
     }
 
     fn draw_background(&mut self) {
-        let tile_x = (self.cycle - 1) as usize / TILE_WIDTH_PX;
-        let tile_y = self.scanline as usize / TILE_HEIGHT_PX;
-        let tile_row = self.scanline as usize % TILE_HEIGHT_PX;
-
         let Tile {
+            number: tile_number,
             nametable_byte: _,
             attribute_byte,
             pattern_lo,
@@ -699,7 +700,9 @@ impl PPU {
 
         // Tile and attribute fetching
         // https://www.nesdev.org/wiki/PPU_scrolling
-        let d3_d2 = match ((tile_x % 4) / 2, (tile_y % 4) / 2) {
+        let tile_attr_x = tile_number % FRAME_WIDTH_TILES;
+        let tile_attr_y = tile_number / FRAME_WIDTH_TILES;
+        let d3_d2 = match ((tile_attr_x % 4) / 2, (tile_attr_y % 4) / 2) {
             (0, 0) => (attribute_byte >> 0) & 0x3,
             (1, 0) => (attribute_byte >> 2) & 0x3,
             (0, 1) => (attribute_byte >> 4) & 0x3,
@@ -707,6 +710,9 @@ impl PPU {
             _ => unreachable!(),
         };
 
+        let tile_x = (self.cycle - 1) as usize / TILE_WIDTH_PX;
+        let tile_y = self.scanline as usize / TILE_HEIGHT_PX;
+        let tile_row = self.scanline as usize % TILE_HEIGHT_PX;
         let base_addr = (((tile_y * TILE_HEIGHT_PX as usize + tile_row)
             * FRAME_WIDTH_TILES as usize)
             + tile_x as usize)
@@ -735,7 +741,7 @@ impl PPU {
 
         const NAMETABLE_BASE: u16 = 0x2000;
         for v in 0..FRAME_NUM_TILES {
-            let nt_addr = NAMETABLE_BASE | v as u16;
+            let nt_addr = NAMETABLE_BASE | (v as u16 & 0xFFF);
             let nt_byte = self.ppu_internal_read(nt_addr) as u16;
 
             const TILE_STRIDE_SHIFT: u16 = 4;
