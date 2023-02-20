@@ -8,21 +8,10 @@ use sdl2::rect::Rect;
 use sdl2::render::{TextureAccess, TextureCreator, WindowCanvas};
 use sdl2::video::{DisplayMode, WindowContext};
 use std::mem::MaybeUninit;
-use std::slice::from_raw_parts;
 use std::sync::Once;
 
 static INIT_SDL: Once = Once::new();
 static mut SDL_CONTEXT: MaybeUninit<sdl2::Sdl> = MaybeUninit::uninit();
-
-/// This is safe since we know that the underlying data is valid and contiguous
-fn to_sdl2_slice(slice: &[u32]) -> &[u8] {
-    unsafe {
-        from_raw_parts(
-            slice.as_ptr() as *const u8,
-            slice.len() * PX_SIZE_BYTES as usize,
-        )
-    }
-}
 
 pub struct SDL2Intrf;
 impl SDL2Intrf {
@@ -91,23 +80,15 @@ impl Renderer for SDLRenderer {
             "scanline is not the width of the screen!"
         );
 
-        let line: Vec<_> = scanline
-            .iter()
-            .map(|c| PALETTE_TABLE[*c as usize])
-            .collect();
-
         // TODO: Should this be created each time or reused??
         let mut texture = self
             .tex_creator
             .create_texture(None, TextureAccess::Streaming, NES_SCREEN_WIDTH, 1)
             .unwrap();
         texture
-            .update(
-                None,
-                to_sdl2_slice(&line),
-                (NES_SCREEN_WIDTH * PX_SIZE_BYTES) as usize,
-            )
+            .update(None, &scanline, (NES_SCREEN_WIDTH * PX_SIZE_BYTES) as usize)
             .unwrap();
+
         let dst_rect = Rect::new(
             0,
             (WINDOW_HEIGHT_MUL * row) as i32,

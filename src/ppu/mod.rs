@@ -35,14 +35,14 @@ const FRAME_SIZE_BYTES: usize =
     PX_SIZE_BYTES * (FRAME_HEIGHT_PX as usize) * (FRAME_WIDTH_PX as usize);
 
 const PALETTE_COLOR_LUT: [u32; 64] = [
-    0x7C7C7C00, 0x0000FC00, 0x0000BC00, 0x4428BC00, 0x94008400, 0xA8002000, 0xA8100000, 0x88140000,
-    0x50300000, 0x00780000, 0x00680000, 0x00580000, 0x00405800, 0x00000000, 0x00000000, 0x00000000,
-    0xBCBCBC00, 0x0078F800, 0x0058F800, 0x6844FC00, 0xD800CC00, 0xE4005800, 0xF8380000, 0xE45C1000,
-    0xAC7C0000, 0x00B80000, 0x00A80000, 0x00A84400, 0x00888800, 0x00000000, 0x00000000, 0x00000000,
-    0xF8F8F800, 0x3CBCFC00, 0x6888FC00, 0x9878F800, 0xF878F800, 0xF8589800, 0xF8785800, 0xFCA04400,
-    0xF8B80000, 0xB8F81800, 0x58D85400, 0x58F89800, 0x00E8D800, 0x78787800, 0x00000000, 0x00000000,
-    0xFCFCFC00, 0xA4E4FC00, 0xB8B8F800, 0xD8B8F800, 0xF8B8F800, 0xF8A4C000, 0xF0D0B000, 0xFCE0A800,
-    0xF8D87800, 0xD8F87800, 0xB8F8B800, 0xB8F8D800, 0x00FCFC00, 0xF8D8F800, 0x00000000, 0x00000000,
+    0x7C7C7C, 0x0000FC, 0x0000BC, 0x4428BC, 0x940084, 0xA80020, 0xA81000, 0x881400, 0x503000,
+    0x007800, 0x006800, 0x005800, 0x004058, 0x000000, 0x000000, 0x000000, 0xBCBCBC, 0x0078F8,
+    0x0058F8, 0x6844FC, 0xD800CC, 0xE40058, 0xF83800, 0xE45C10, 0xAC7C00, 0x00B800, 0x00A800,
+    0x00A844, 0x008888, 0x000000, 0x000000, 0x000000, 0xF8F8F8, 0x3CBCFC, 0x6888FC, 0x9878F8,
+    0xF878F8, 0xF85898, 0xF87858, 0xFCA044, 0xF8B800, 0xB8F818, 0x58D854, 0x58F898, 0x00E8D8,
+    0x787878, 0x000000, 0x000000, 0xFCFCFC, 0xA4E4FC, 0xB8B8F8, 0xD8B8F8, 0xF8B8F8, 0xF8A4C0,
+    0xF0D0B0, 0xFCE0A8, 0xF8D878, 0xD8F878, 0xB8F8B8, 0xB8F8D8, 0x00FCFC, 0xF8D8F8, 0x000000,
+    0x000000,
 ];
 
 #[derive(Default)]
@@ -89,10 +89,10 @@ const BLACK: [u8; 4] = [0x00; 4];
 
 fn to_u8_slice(x: u32) -> [u8; 4] {
     [
-        ((x >> 24) & 0xFF) as u8,
-        ((x >> 16) & 0xFF) as u8,
-        ((x >> 8) & 0xFF) as u8,
         ((x >> 0) & 0xFF) as u8,
+        ((x >> 8) & 0xFF) as u8,
+        ((x >> 16) & 0xFF) as u8,
+        ((x >> 24) & 0xFF) as u8,
     ]
 }
 
@@ -385,7 +385,7 @@ impl PPU {
             let duration_ms = (time::Instant::now() - self.timestamp).as_millis();
             event!(
                 Level::INFO,
-                "END FRAME {}> {}ms ({}fps)",
+                "END FRAME {}> {}ms ({} fps)",
                 self.frame,
                 duration_ms,
                 30_000 / duration_ms
@@ -471,7 +471,7 @@ impl PPU {
 
         event!(
             Level::DEBUG,
-            "[CYC:{:<3}][SL:{:<3}] V({:#<04x}): (NT={:0X}, AT={:0X}, LO={:0X}, HI={:0X})",
+            "[CYC:{:<3}][SL:{:<3}] V({:#<04x}): (NT={:0X}, ATTR={:0X}, LO={:0X}, HI={:0X})",
             self.cycle,
             self.scanline,
             self.registers.addr.to_u16(),
@@ -641,8 +641,9 @@ impl PPU {
         self.draw_sprites();
     }
 
-    fn palette_read(&mut self, mut addr: u16) -> u8 {
+    fn palette_read(&mut self, addr: u16) -> u8 {
         assert!(addr <= 0xFF);
+        let mut addr = addr & 0x1F;
 
         // Addresses $3F10/$3F14/$3F18/$3F1C are mirrors of $3F00/$3F04/$3F08/$3F0C
         if addr % 4 == 0 {
@@ -650,7 +651,7 @@ impl PPU {
         }
 
         // $3F20-$3FFF: mirrors of palette RAM
-        self.palette_table[(addr & 0x1F) as usize] & 0x1F
+        self.palette_table[addr as usize] & 0x3F
     }
 
     fn palette_write(&mut self, mut addr: u16, val: u8) {
@@ -698,7 +699,7 @@ impl PPU {
 
         // Tile and attribute fetching
         // https://www.nesdev.org/wiki/PPU_scrolling
-        let d3_d2 = match (tile_x % 2, tile_y % 2) {
+        let d3_d2 = match ((tile_x % 4) / 2, (tile_y % 4) / 2) {
             (0, 0) => (attribute_byte >> 0) & 0x3,
             (1, 0) => (attribute_byte >> 2) & 0x3,
             (0, 1) => (attribute_byte >> 4) & 0x3,
@@ -745,7 +746,7 @@ impl PPU {
             let attribute_addr = 0x23C0 | (v & 0x0C00) | ((v >> 4) & 0x38) | ((v >> 2) & 0x07);
             let attribute_byte = self.ppu_internal_read(attribute_addr as u16);
 
-            let d3_d2 = match (tile_x % 2, tile_y % 2) {
+            let d3_d2 = match ((tile_x % 4) / 2, (tile_y % 4) / 2) {
                 (0, 0) => (attribute_byte >> 0) & 0x3,
                 (1, 0) => (attribute_byte >> 2) & 0x3,
                 (0, 1) => (attribute_byte >> 4) & 0x3,
