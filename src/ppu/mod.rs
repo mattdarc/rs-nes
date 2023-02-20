@@ -411,7 +411,7 @@ impl PPU {
         // FIXME: add extra checks mode
         // self.clear_render_buffer();
 
-        std::thread::sleep(std::time::Duration::from_millis(16));
+        std::thread::sleep(std::time::Duration::from_millis(10));
     }
 
     fn is_blanking(&self) -> bool {
