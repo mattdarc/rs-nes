@@ -489,14 +489,18 @@ impl PPU {
     }
 
     pub fn sprite_hit_next_scanline(&self, sprite: &Sprite) -> bool {
+        // NOTE: sprites on the first scanline are never rendered
+        let next_scanline = self.scanline + 1;
+        if next_scanline == VISIBLE_SCANLINES as i16 {
+            return false;
+        }
+
         let sprite_height = if (self.registers.ctrl & PpuCtrl::SPRITE_HEIGHT) != 0 {
             16
         } else {
             8
         };
 
-        // NOTE: sprites on the first scanline are never rendered
-        let next_scanline = self.scanline + 1;
         sprite.y() as i16 <= next_scanline && next_scanline < (sprite.y() + sprite_height) as i16
     }
 
@@ -906,6 +910,20 @@ impl PPU {
         self.oam_secondary.sprites.push(sprite);
     }
 
+    fn create_range(rev: bool, n: usize) -> impl Iterator<Item = usize> {
+        let (mut start, step) = if rev {
+            (n, usize::max_value())
+        } else {
+            (usize::max_value(), 1)
+        };
+
+        std::iter::repeat_with(move || {
+            start = start.wrapping_add(step);
+            start
+        })
+        .take(n)
+    }
+
     fn draw_sprites(&mut self) {
         assert!(self.is_visible_cycle());
         assert!(
@@ -941,7 +959,7 @@ impl PPU {
             if sprite.vert_flip() {
                 sprite_row = if large_sprites { 16 } else { 8 } - sprite_row;
             }
-            assert!(sprite_row < 16, "sprite row too large {}", sprite_row);
+            assert!(sprite_row < 16, "sprite row too large: {}", sprite_row);
 
             // https://www.nesdev.org/wiki/PPU_palettes
             let d4 = 1_u8; // Sprite, choose sprite palette
@@ -951,10 +969,11 @@ impl PPU {
             let pattern_lo = self.ppu_internal_read(tile_row_addr);
             let pattern_hi = self.ppu_internal_read(tile_row_addr + TILE_HI_OFFSET_BYTES);
             let color_idx = tile_lohi_to_idx(pattern_lo, pattern_hi);
+            let px_idx = PPU::create_range(sprite.horiz_flip(), 8);
 
             // FIXME: factor this out to merge with background
             let base_addr = self.render_address_base(sprite.x() as usize);
-            for (px, &lo) in color_idx.iter().enumerate().filter(|(_, &lo)| lo != 0) {
+            for (px, &lo) in px_idx.zip(color_idx.iter()).filter(|(_, &lo)| lo != 0) {
                 assert!(lo < 4);
 
                 let palette_addr = (d4 << 4) | (d3_d2 << 2) | lo;
