@@ -56,6 +56,20 @@ struct Tile {
     pattern_hi: u8,
 }
 
+struct OamSecondary {
+    sprites: Vec<Sprite>,
+    has_sprite_0: bool,
+}
+
+impl Default for OamSecondary {
+    fn default() -> Self {
+        OamSecondary {
+            sprites: Vec::new(),
+            has_sprite_0: false,
+        }
+    }
+}
+
 pub struct PPU {
     frame_buf: Vec<u8>,
     cartridge: Cartridge,
@@ -71,7 +85,7 @@ pub struct PPU {
 
     // Sprites
     oam_primary: [u8; 256], // Reinterpreted as sprites
-    oam_secondary: Vec<Sprite>,
+    oam_secondary: OamSecondary,
 
     // Background
     cycle: i16,
@@ -143,7 +157,7 @@ impl PPU {
             flags: Flags::default(),
             renderer,
             oam_primary: [0; 256],
-            oam_secondary: Vec::new(),
+            oam_secondary: OamSecondary::default(),
             cycle: 0,
             scanline: -1,
             frame: 0,
@@ -331,12 +345,12 @@ impl PPU {
 
     fn show_clipped_lhs(&self) -> bool {
         self.registers.mask & (PpuMask::SHOW_LEFT_BG | PpuMask::SHOW_LEFT_SPRITES) != 0
-            && !self.oam_secondary.is_empty()
-            && self.oam_secondary[0].x() <= 7
+            && self.oam_secondary.has_sprite_0
+            && self.oam_secondary.sprites[0].x() <= 7
     }
 
     fn sprite0_past_rhs(&self) -> bool {
-        !self.oam_secondary.is_empty() && self.oam_secondary[0].x() == 255
+        self.oam_secondary.has_sprite_0 && self.oam_secondary.sprites[0].x() == 255
     }
 
     fn sprites_enabled(&self) -> bool {
@@ -345,16 +359,6 @@ impl PPU {
 
     fn has_sprite0_hit(&self) -> bool {
         self.registers.status & PpuStatus::SPRITE_0_HIT != 0
-    }
-
-    fn update_sprite0_hit(&mut self) {
-        if self.sprites_enabled()
-            && self.show_clipped_lhs()
-            && !self.sprite0_past_rhs()
-            && !self.has_sprite0_hit()
-        {
-            self.registers.status |= PpuStatus::SPRITE_0_HIT;
-        }
     }
 
     fn rendering_enabled(&self) -> bool {
@@ -405,7 +409,7 @@ impl PPU {
         // self.show_nametable();
         // self.show_pattern_table();
         if self.rendering_enabled() {
-            // FIXME: This should be done on a line basis in do_visible_scanline
+            // FIXME: This should be done on a line basis
             self.render_frame();
         }
 
@@ -573,10 +577,11 @@ impl PPU {
                     // updated. A possible cycle-accurate improvememt would be to do this fetch
                     // every 8 cycles but write the pixels every cycle. Not sure if we actually
                     // need to do this to get a workable game.
-                    self.do_visible_scanline();
+                    self.draw_background();
                     self.last_tile = tile_x;
                 }
             }
+            // Draw sprites once on the last visible cycle so they're over the background
             (0..240, 256) => self.draw_sprites(),
             (0..240, 257..321) => self.evaluate_sprites_next_scanline(),
             (0..240, 321..342) => { /* garbage nametable fetches */ }
@@ -634,25 +639,6 @@ impl PPU {
         nmi
     }
 
-    fn do_visible_scanline(&mut self) {
-        // The value of OAMADDR when sprite evaluation starts at tick 65 of the visible scanlines
-        // will determine where in OAM sprite evaluation starts, and hence which sprite gets
-        // treated as sprite 0. The first OAM entry to be checked during sprite evaluation is the
-        // one starting at OAM[OAMADDR].
-        assert!(
-            0 <= self.scanline && self.scanline < VISIBLE_SCANLINES as i16,
-            "Should not render during non-visible scanline {}",
-            self.scanline
-        );
-
-        // Sprite evaluation does not cause a hit -- only rendering
-        //
-        // https://www.nesdev.org/wiki/PPU_sprite_evaluation
-        self.update_sprite0_hit();
-
-        self.draw_background();
-    }
-
     fn palette_read(&mut self, addr: u16) -> u8 {
         assert!(addr <= 0xFF);
         let mut addr = addr & 0x1F;
@@ -678,7 +664,9 @@ impl PPU {
     }
 
     fn is_visible_cycle(&self) -> bool {
-        self.scanline < 240 && self.cycle < 257
+        0 <= self.scanline
+            && self.scanline < VISIBLE_SCANLINES as i16
+            && self.cycle < VISIBLE_CYCLES as i16
     }
 
     fn render_address_base(&self, x: usize) -> usize {
@@ -886,7 +874,7 @@ impl PPU {
     }
 
     fn evaluate_sprites_next_scanline(&mut self) {
-        if (self.registers.mask & PpuMask::SHOW_SPRITES) == 0 {
+        if !self.sprites_enabled() {
             return;
         }
 
@@ -902,31 +890,42 @@ impl PPU {
             return;
         }
 
-        if self.oam_secondary.len() >= 8 {
+        if self.oam_secondary.sprites.len() >= 8 {
             // Sprite found but all of them are already set. Set the overflow flag without adding
             // the sprite to be rendered
             self.registers.ctrl |= PpuStatus::SPRITE_OVERFLOW;
             return;
         }
 
+        // This is sprite 0 in the OAM
+        if n == 0 {
+            self.oam_secondary.has_sprite_0 = true;
+        }
+
         // Success: fouund a sprite we can actually push
-        self.oam_secondary.push(sprite);
+        self.oam_secondary.sprites.push(sprite);
     }
 
     fn draw_sprites(&mut self) {
         assert!(self.is_visible_cycle());
         assert!(
-            self.oam_secondary.len() < 9,
+            self.oam_secondary.sprites.len() < 9,
             "The NES can only draw 8 sprites"
         );
 
+        // This must happen when the PPU is drawing the picture, as this is the next scanline from
+        // when the sprites were evaluated
+        if self.show_clipped_lhs() && !self.sprite0_past_rhs() {
+            self.registers.status |= PpuStatus::SPRITE_0_HIT;
+        }
+
         let large_sprites = self.registers.ctrl & PpuCtrl::SPRITE_HEIGHT != 0;
 
-        let mut sprite_queue = Vec::new();
+        let mut sprite_queue = OamSecondary::default();
         std::mem::swap(&mut sprite_queue, &mut self.oam_secondary);
 
         // Sprites with a lower index are drawn in front, reverse the vec
-        for sprite in sprite_queue.iter().rev() {
+        for sprite in sprite_queue.sprites.iter().rev() {
             if !sprite.is_visible() {
                 continue;
             }
@@ -955,7 +954,7 @@ impl PPU {
 
             // FIXME: factor this out to merge with background
             let base_addr = self.render_address_base(sprite.x() as usize);
-            for (px, &lo) in color_idx.iter().enumerate() {
+            for (px, &lo) in color_idx.iter().enumerate().filter(|(_, &lo)| lo != 0) {
                 assert!(lo < 4);
 
                 let palette_addr = (d4 << 4) | (d3_d2 << 2) | lo;
