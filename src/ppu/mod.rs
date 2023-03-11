@@ -9,6 +9,7 @@ use crate::memory::RAM;
 use flags::*;
 use registers::*;
 use sprite::Sprite;
+use std::collections::VecDeque;
 use std::time;
 use tracing::{event, Level};
 
@@ -92,8 +93,7 @@ pub struct PPU {
     scanline: i16,
     frame: usize,
     last_tile: i16,
-    current_tile: Tile,
-    next_tile: Tile,
+    tile_q: VecDeque<Tile>,
     ppudata_buffer: u8,
 
     palette_table: [u8; 32],
@@ -148,6 +148,11 @@ impl PPU {
     pub fn new(cartridge: Cartridge, renderer: Box<dyn Renderer>) -> Self {
         let cartridge_header = cartridge.header();
 
+        let mut tile_q = VecDeque::with_capacity(3);
+        tile_q.push_back(Tile::default());
+        tile_q.push_back(Tile::default());
+        tile_q.push_back(Tile::default());
+
         PPU {
             frame_buf: vec![0_u8; FRAME_SIZE_BYTES],
             cartridge,
@@ -162,8 +167,7 @@ impl PPU {
             scanline: -1,
             frame: 0,
             last_tile: 0,
-            current_tile: Tile::default(),
-            next_tile: Tile::default(),
+            tile_q,
             ppudata_buffer: 0,
 
             vram: RAM::with_size(PPU_VRAM_SIZE),
@@ -353,6 +357,10 @@ impl PPU {
         self.oam_secondary.has_sprite_0 && self.oam_secondary.sprites[0].x() == 255
     }
 
+    fn background_enabled(&self) -> bool {
+        self.registers.mask & PpuMask::SHOW_BG != 0
+    }
+
     fn sprites_enabled(&self) -> bool {
         self.registers.mask & PpuMask::SHOW_SPRITES != 0
     }
@@ -433,46 +441,67 @@ impl PPU {
         }
     }
 
+    fn back_tile_mut(&mut self) -> &mut Tile {
+        assert!(self.tile_q.len() == 3);
+        self.tile_q
+            .back_mut()
+            .expect("tile_q should always be of size 3")
+    }
+
+    fn back_tile(&self) -> &Tile {
+        assert!(self.tile_q.len() == 3);
+        self.tile_q
+            .back()
+            .expect("tile_q should always be of size 3")
+    }
+
+    fn front_tile(&self) -> &Tile {
+        assert!(self.tile_q.len() == 3);
+        self.tile_q
+            .front()
+            .expect("tile_q should always be of size 3")
+    }
+
     fn do_nametable_fetch(&mut self) {
         // Upper bits are the fine_y scrolling
         let tile_addr = self.registers.addr.to_u16() & 0xFFF;
 
-        self.next_tile.number = (tile_addr % 960) as usize;
-        self.next_tile.nametable_byte = self.ppu_internal_read(0x2000 | tile_addr);
+        self.back_tile_mut().number = (tile_addr % 960) as usize;
+        self.back_tile_mut().nametable_byte = self.ppu_internal_read(0x2000 | tile_addr);
     }
 
     fn do_attribute_fetch(&mut self) {
         let v = self.registers.addr.to_u16();
         let attribute_addr = 0x23C0 | (v & 0x0C00) | ((v >> 4) & 0x38) | ((v >> 2) & 0x07);
         let attribute_byte = self.ppu_internal_read(attribute_addr);
-        self.next_tile.attribute_byte = attribute_byte;
+        self.back_tile_mut().attribute_byte = attribute_byte;
     }
 
     fn do_pattern_lo_fetch(&mut self) {
         let v = self.registers.addr.to_u16();
         let fine_y = (v >> 12) & 0x7;
 
-        let tile_base =
-            self.bg_table_base() | ((self.next_tile.nametable_byte as u16) << TILE_STRIDE_SHIFT);
+        let tile_base = self.bg_table_base()
+            | ((self.back_tile_mut().nametable_byte as u16) << TILE_STRIDE_SHIFT);
 
         let pattable_addr = tile_base | fine_y;
-        self.next_tile.pattern_lo = self.ppu_internal_read(pattable_addr);
+        self.back_tile_mut().pattern_lo = self.ppu_internal_read(pattable_addr);
     }
 
     fn do_pattern_hi_fetch(&mut self) {
         let v = self.registers.addr.to_u16();
         let fine_y = (v >> 12) & 0x7;
 
-        let tile_base =
-            self.bg_table_base() | ((self.next_tile.nametable_byte as u16) << TILE_STRIDE_SHIFT);
+        let tile_base = self.bg_table_base()
+            | ((self.back_tile_mut().nametable_byte as u16) << TILE_STRIDE_SHIFT);
         let pattable_addr = tile_base | fine_y;
 
-        self.next_tile.pattern_hi = self.ppu_internal_read(pattable_addr + TILE_HI_OFFSET_BYTES);
+        self.back_tile_mut().pattern_hi =
+            self.ppu_internal_read(pattable_addr + TILE_HI_OFFSET_BYTES);
     }
 
     fn do_prepare_next_tile(&mut self) {
         assert!(!self.is_blanking());
-        std::mem::swap(&mut self.current_tile, &mut self.next_tile);
 
         event!(
             Level::DEBUG,
@@ -480,12 +509,14 @@ impl PPU {
             self.cycle,
             self.scanline,
             self.registers.addr.to_u16(),
-            self.current_tile.number,
-            self.current_tile.nametable_byte,
-            self.current_tile.attribute_byte,
-            self.current_tile.pattern_lo,
-            self.current_tile.pattern_hi,
+            self.back_tile().number,
+            self.back_tile().nametable_byte,
+            self.back_tile().attribute_byte,
+            self.back_tile().pattern_lo,
+            self.back_tile().pattern_hi,
         );
+
+        self.tile_q.rotate_left(1);
     }
 
     pub fn sprite_hit_next_scanline(&self, sprite: &Sprite) -> bool {
@@ -541,11 +572,23 @@ impl PPU {
             return;
         }
 
+        if 257 <= self.cycle && self.cycle < 320 {
+            // No fetches happen here, this is where sprites are fetched (we don't yet though)
+            return;
+        }
+
+        if self.cycle > 336 {
+            // FIXME: Fetches after this cycle are special and fetch two garbage nametables. Might
+            // not need to implement this
+            // https://www.nesdev.org/wiki/PPU_rendering#Pre-render_scanline_(-1_or_261)
+            return;
+        }
+
         // FIXME: A possible performance improvement would be to pre-allocate a scanline-size buffer
         // for tiles where we could then render all at once. We could potentially do the tile fetches
         // in one-shot as well. Would need to validate that this works with scrolling though before
         // changing it
-        match self.cycle % 8 {
+        match (self.cycle - 1) % 8 {
             0 => self.do_prepare_next_tile(),
             1 => self.do_nametable_fetch(),
             3 => self.do_attribute_fetch(),
@@ -689,13 +732,17 @@ impl PPU {
     fn draw_background(&mut self) {
         assert!(self.is_visible_cycle());
 
+        if !self.background_enabled() {
+            return;
+        }
+
         let Tile {
             number: tile_number,
             nametable_byte: _,
             attribute_byte,
             pattern_lo,
             pattern_hi,
-        } = self.current_tile;
+        } = self.front_tile();
 
         // https://www.nesdev.org/wiki/PPU_palettes
         let d4 = 0_u8; // Rendering background, choose background palette
@@ -735,7 +782,7 @@ impl PPU {
         let base_addr = self.render_base_address(x);
 
         // 0 is transparent, filter these out
-        let color_idx = tile_lohi_to_idx(pattern_lo, pattern_hi);
+        let color_idx = tile_lohi_to_idx(*pattern_lo, *pattern_hi);
         for (px, &lo) in color_idx.iter().enumerate() {
             assert!(lo < 4);
 
