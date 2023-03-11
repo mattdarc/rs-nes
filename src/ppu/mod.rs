@@ -22,6 +22,8 @@ const STARTUP_SCANLINES: usize = 30_000 / CYCLES_PER_SCANLINE;
 
 const PX_SIZE_BYTES: usize = 4; // 4th byte for the pixel is unused
 
+const TILE_HI_OFFSET_BYTES: u16 = 8;
+const TILE_STRIDE_SHIFT: u16 = 4;
 const TILE_WIDTH_PX: usize = 8;
 const TILE_HEIGHT_PX: usize = 8;
 const TILE_SIZE_BYTES: usize = 16;
@@ -295,7 +297,7 @@ impl PPU {
 
             // $3F00-$3F1F: Palette RAM
             0x3F00..=0x3FFF => self.palette_write(addr - 0x3F00, val),
-            _ => unreachable!(),
+            _ => unreachable!("Out of bounds: {:#x}", addr),
         }
     }
 
@@ -397,7 +399,6 @@ impl PPU {
         self.frame += 1;
         self.flags.has_nmi = false;
         self.flags.odd = !self.flags.odd;
-        self.oam_secondary.clear();
 
         // FIXME: Would be cool to make these options that could be passed at startup, and updated
         // during runtime
@@ -417,7 +418,7 @@ impl PPU {
     fn is_blanking(&self) -> bool {
         // SW can set forced-blank mode, which disables all rendering and updates. This is used
         // typically during initialization
-        let forced_blank = (self.registers.mask & (PpuMask::SHOW_BG | PpuMask::SHOW_SPRITES)) == 0;
+        let forced_blank = !self.rendering_enabled();
         let in_vblank = self.scanline > VISIBLE_SCANLINES as i16;
         forced_blank || in_vblank
     }
@@ -447,7 +448,6 @@ impl PPU {
         let v = self.registers.addr.to_u16();
         let fine_y = (v >> 12) & 0x7;
 
-        const TILE_STRIDE_SHIFT: u16 = 4;
         let tile_base =
             self.bg_table_base() | ((self.next_tile.nametable_byte as u16) << TILE_STRIDE_SHIFT);
 
@@ -459,13 +459,11 @@ impl PPU {
         let v = self.registers.addr.to_u16();
         let fine_y = (v >> 12) & 0x7;
 
-        const TILE_STRIDE_SHIFT: u16 = 4;
         let tile_base =
             self.bg_table_base() | ((self.next_tile.nametable_byte as u16) << TILE_STRIDE_SHIFT);
         let pattable_addr = tile_base | fine_y;
 
-        const HIGH_OFFSET_BYTES: u16 = 8; // The next bitplane for this tile
-        self.next_tile.pattern_hi = self.ppu_internal_read(pattable_addr + HIGH_OFFSET_BYTES);
+        self.next_tile.pattern_hi = self.ppu_internal_read(pattable_addr + TILE_HI_OFFSET_BYTES);
     }
 
     fn do_prepare_next_tile(&mut self) {
@@ -484,6 +482,18 @@ impl PPU {
             self.current_tile.pattern_lo,
             self.current_tile.pattern_hi,
         );
+    }
+
+    pub fn sprite_hit_next_scanline(&self, sprite: &Sprite) -> bool {
+        let sprite_height = if (self.registers.ctrl & PpuCtrl::SPRITE_HEIGHT) != 0 {
+            16
+        } else {
+            8
+        };
+
+        // NOTE: sprites on the first scanline are never rendered
+        let next_scanline = self.scanline + 1;
+        sprite.y() as i16 <= next_scanline && next_scanline < (sprite.y() + sprite_height) as i16
     }
 
     fn update_vaddr(&mut self) {
@@ -550,7 +560,7 @@ impl PPU {
 
             // Visible scanlines (0-239)
             (0..240, 0) => { /* idle cycle */ }
-            (0..240, 1..257) => {
+            (0..240, 1..256) => {
                 // FIXME: Similar to do_tile_fetches, if we update that to use a tile-array then
                 // this becomes simpler since we can write one scanline at a time at the end of the
                 // frame. We could also dispatch another thread potentially for the rendering, resulting in a
@@ -567,7 +577,8 @@ impl PPU {
                     self.last_tile = tile_x;
                 }
             }
-            (0..240, 257..321) => self.evaluate_sprites(),
+            (0..240, 256) => self.draw_sprites(),
+            (0..240, 257..321) => self.evaluate_sprites_next_scanline(),
             (0..240, 321..342) => { /* garbage nametable fetches */ }
 
             (240, _) => { /* idle scanline */ }
@@ -633,7 +644,6 @@ impl PPU {
             "Should not render during non-visible scanline {}",
             self.scanline
         );
-        assert!(self.oam_secondary.len() < 9, "We can only draw 8 sprites");
 
         // Sprite evaluation does not cause a hit -- only rendering
         //
@@ -641,8 +651,6 @@ impl PPU {
         self.update_sprite0_hit();
 
         self.draw_background();
-
-        self.draw_sprites();
     }
 
     fn palette_read(&mut self, addr: u16) -> u8 {
@@ -669,7 +677,25 @@ impl PPU {
         self.palette_table[(addr & 0x1F) as usize] = val;
     }
 
+    fn is_visible_cycle(&self) -> bool {
+        self.scanline < 240 && self.cycle < 257
+    }
+
+    fn render_address_base(&self, x: usize) -> usize {
+        assert!(self.is_visible_cycle());
+
+        let tile_x = x / TILE_WIDTH_PX;
+        let tile_y = self.scanline as usize / TILE_HEIGHT_PX;
+        let tile_row = self.scanline as usize % TILE_HEIGHT_PX;
+
+        (((tile_y * TILE_HEIGHT_PX as usize + tile_row) * FRAME_WIDTH_TILES as usize)
+            + tile_x as usize)
+            * TILE_WIDTH_PX as usize
+    }
+
     fn draw_background(&mut self) {
+        assert!(self.is_visible_cycle());
+
         let Tile {
             number: tile_number,
             nametable_byte: _,
@@ -710,13 +736,7 @@ impl PPU {
             _ => unreachable!(),
         };
 
-        let tile_x = (self.cycle - 1) as usize / TILE_WIDTH_PX;
-        let tile_y = self.scanline as usize / TILE_HEIGHT_PX;
-        let tile_row = self.scanline as usize % TILE_HEIGHT_PX;
-        let base_addr = (((tile_y * TILE_HEIGHT_PX as usize + tile_row)
-            * FRAME_WIDTH_TILES as usize)
-            + tile_x as usize)
-            * TILE_WIDTH_PX as usize;
+        let base_addr = self.render_address_base((self.cycle - 1) as usize);
 
         // 0 is transparent, filter these out
         let color_idx = tile_lohi_to_idx(pattern_lo, pattern_hi);
@@ -865,8 +885,92 @@ impl PPU {
             .render_frame(&pattern_table, TEX_WIDTH_PX, TEX_HEIGHT_PX);
     }
 
-    fn evaluate_sprites(&mut self) {}
-    fn draw_sprites(&mut self) {}
+    fn evaluate_sprites_next_scanline(&mut self) {
+        if (self.registers.mask & PpuMask::SHOW_SPRITES) == 0 {
+            return;
+        }
+
+        const FIRST_CYCLE: i16 = 257;
+        let n = (self.cycle - FIRST_CYCLE) as usize;
+        assert!(n < 64);
+
+        // Process the sprite in the primary OAM at this location. If it is in the range of the
+        // next scanline being rendered, copy it to the second OAM to be rendered
+        let sprite_range = (4 * n)..((4 * n) + 4);
+        let sprite = Sprite::from(&self.oam_primary[sprite_range]);
+        if !self.sprite_hit_next_scanline(&sprite) {
+            return;
+        }
+
+        if self.oam_secondary.len() >= 8 {
+            // Sprite found but all of them are already set. Set the overflow flag without adding
+            // the sprite to be rendered
+            self.registers.ctrl |= PpuStatus::SPRITE_OVERFLOW;
+            return;
+        }
+
+        // Success: fouund a sprite we can actually push
+        self.oam_secondary.push(sprite);
+    }
+
+    fn draw_sprites(&mut self) {
+        assert!(self.is_visible_cycle());
+        assert!(
+            self.oam_secondary.len() < 9,
+            "The NES can only draw 8 sprites"
+        );
+
+        let large_sprites = self.registers.ctrl & PpuCtrl::SPRITE_HEIGHT != 0;
+
+        let mut sprite_queue = Vec::new();
+        std::mem::swap(&mut sprite_queue, &mut self.oam_secondary);
+
+        // Sprites with a lower index are drawn in front, reverse the vec
+        for sprite in sprite_queue.iter().rev() {
+            if !sprite.is_visible() {
+                continue;
+            }
+
+            let (pattern_table_base, tile) = if large_sprites {
+                sprite.tile16()
+            } else {
+                (self.sprite_table_base(), sprite.tile8())
+            };
+
+            assert!(sprite.y() <= self.scanline);
+            let mut sprite_row = (self.scanline - sprite.y()) as u16;
+            if sprite.vert_flip() {
+                sprite_row = if large_sprites { 16 } else { 8 } - sprite_row;
+            }
+            assert!(sprite_row < 16, "sprite row too large {}", sprite_row);
+
+            // https://www.nesdev.org/wiki/PPU_palettes
+            let d4 = 1_u8; // Sprite, choose sprite palette
+            let d3_d2 = sprite.color_d3_d2();
+
+            let tile_row_addr = pattern_table_base | (tile << TILE_STRIDE_SHIFT) | sprite_row;
+            let pattern_lo = self.ppu_internal_read(tile_row_addr);
+            let pattern_hi = self.ppu_internal_read(tile_row_addr + TILE_HI_OFFSET_BYTES);
+            let color_idx = tile_lohi_to_idx(pattern_lo, pattern_hi);
+
+            // FIXME: factor this out to merge with background
+            let base_addr = self.render_address_base(sprite.x() as usize);
+            for (px, &lo) in color_idx.iter().enumerate() {
+                assert!(lo < 4);
+
+                let palette_addr = (d4 << 4) | (d3_d2 << 2) | lo;
+                let color_idx = self.palette_read(palette_addr as u16);
+                let color = PALETTE_COLOR_LUT[color_idx as usize];
+
+                let buf_addr = PX_SIZE_BYTES * (base_addr + px);
+                let render_slice = &mut self.frame_buf[buf_addr..(buf_addr + PX_SIZE_BYTES)];
+
+                // FIXME: add extra checks mode
+                // assert!(render_slice.iter().all(|&p| p == 0));
+                render_slice.copy_from_slice(&to_u8_slice(color));
+            }
+        }
+    }
 
     fn render_frame(&mut self) {
         self.renderer.render_frame(
