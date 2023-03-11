@@ -673,16 +673,17 @@ impl PPU {
             && self.cycle < VISIBLE_CYCLES as i16
     }
 
-    fn render_address_base(&self, x: usize) -> usize {
+    /// Compute the rendering base address into the buffer to render at the current scanline at the
+    /// specified x-coordinate. Should only be called during a visible cycle and scanline
+    fn render_base_address(&self, x: usize) -> usize {
         assert!(self.is_visible_cycle());
 
-        let tile_x = x / TILE_WIDTH_PX;
         let tile_y = self.scanline as usize / TILE_HEIGHT_PX;
         let tile_row = self.scanline as usize % TILE_HEIGHT_PX;
 
-        (((tile_y * TILE_HEIGHT_PX as usize + tile_row) * FRAME_WIDTH_TILES as usize)
-            + tile_x as usize)
+        ((tile_y * TILE_HEIGHT_PX as usize + tile_row) * FRAME_WIDTH_TILES as usize)
             * TILE_WIDTH_PX as usize
+            + x
     }
 
     fn draw_background(&mut self) {
@@ -728,7 +729,10 @@ impl PPU {
             _ => unreachable!(),
         };
 
-        let base_addr = self.render_address_base((self.cycle - 1) as usize);
+        // Rendering the background shouldbe tile-aligned
+        let x = (self.cycle - 1) as usize;
+        assert!((x % TILE_WIDTH_PX) == 0);
+        let base_addr = self.render_base_address(x);
 
         // 0 is transparent, filter these out
         let color_idx = tile_lohi_to_idx(pattern_lo, pattern_hi);
@@ -972,7 +976,7 @@ impl PPU {
             let px_idx = PPU::create_range(sprite.horiz_flip(), 8);
 
             // FIXME: factor this out to merge with background
-            let base_addr = self.render_address_base(sprite.x() as usize);
+            let base_addr = self.render_base_address(sprite.x() as usize);
             for (px, &lo) in px_idx.zip(color_idx.iter()).filter(|(_, &lo)| lo != 0) {
                 assert!(lo < 4);
 
