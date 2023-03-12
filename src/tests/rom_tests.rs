@@ -76,7 +76,7 @@ impl NestestParser {
                 .name("cycle")
                 .unwrap()
                 .as_str()
-                .parse::<usize>()
+                .parse::<i16>()
                 .expect("PPU cycle not numeric");
             let scanline = PPU_RE
                 .captures(line)
@@ -84,7 +84,7 @@ impl NestestParser {
                 .name("scanline")
                 .unwrap()
                 .as_str()
-                .parse::<usize>()
+                .parse::<i16>()
                 .expect("Scanline not numeric");
 
             let mut builder = CpuStateBuilder::new()

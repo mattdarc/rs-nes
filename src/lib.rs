@@ -7,13 +7,13 @@ extern crate sdl2;
 extern crate bitflags;
 
 pub mod apu;
+pub mod audio;
 pub mod cartridge;
 pub mod cpu;
 pub mod graphics;
 pub mod ppu;
 
 mod bus;
-mod common;
 mod controller;
 mod memory;
 
@@ -155,7 +155,5 @@ impl<'a> VNES<'a> {
         .unwrap()
     }
 }
-
-pub mod audio {}
 
 pub mod input {}

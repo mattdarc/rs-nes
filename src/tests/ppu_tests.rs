@@ -4,6 +4,7 @@ use std::time::Duration;
 use venus::cartridge::*;
 use venus::ppu::PPU;
 
+// FIXME: Should write a TestRenderer which we can implement to read/write a binary file of frames
 #[test]
 fn donkey_kong() {
     return;
