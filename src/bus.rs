@@ -40,14 +40,12 @@ pub struct NesBus {
 
 impl NesBus {
     pub fn new(game: Cartridge, renderer: Box<dyn Renderer>) -> Self {
-        let dpcm_samples = game.dpcm_read();
-
         NesBus {
-            game: game.clone(),
             _controller1: Controller::new(),
             _controller2: Controller::new(),
-            ppu: PPU::new(game, renderer),
-            apu: APU::new(dpcm_samples),
+            ppu: PPU::new(&game, renderer),
+            apu: APU::new(&game),
+            game,
             cpu_ram: RAM::with_size(0x800),
             nmi: None,
 
@@ -74,7 +72,7 @@ impl Bus for NesBus {
         // FIXME: *Could* make each of these components conform to a common interface which has
         // read/write register, but the NES is fixed HW so I don't see the benefit ATM
         let value = match addr {
-            0x0..=0x1FFF => self.cpu_ram.read(addr & 0x7FF),
+            0x0..=0x1FFF => self.cpu_ram[addr as usize & 0x7FF],
             0x2000..=0x3FFF => self.ppu.register_read(addr - 0x2000),
             0x4000..=0x4015 => self.apu.register_read(addr - 0x4000),
             0x4016 => {
@@ -100,7 +98,7 @@ impl Bus for NesBus {
         self.dump_instr("write", addr, val);
 
         match addr {
-            0x0..=0x1FFF => self.cpu_ram.write(addr & 0x7FF, val),
+            0x0..=0x1FFF => self.cpu_ram[addr as usize & 0x7FF] = val,
             0x2000..=0x3FFF => self.ppu.register_write(addr - 0x2000, val),
             0x4000..0x4014 | 0x4015 => self.apu.register_write(addr - 0x4000, val),
             // NOTE: Controllers can be written to to enable strobe mode

@@ -4,12 +4,11 @@
 
 mod mapper0;
 mod mapper1;
-mod mapper3;
 
 use super::header::Header;
+use crate::memory::ROM;
 use mapper0::Mapper0;
 use mapper1::Mapper1;
-use mapper3::Mapper3;
 
 use std::fmt;
 
@@ -28,39 +27,22 @@ fn dump_game(header: &Header, game: &[u8]) {
     }
 }
 
-pub trait Mapper {
-    fn get_num(&self) -> u8;
-    fn rom_start(&self) -> u16 {
-        0x8000
-    }
-
-    fn box_clone(&self) -> Box<dyn Mapper>;
-
-    // PRG
-    fn prg_read(&self, addr: u16) -> u8;
-    fn prg_write(&mut self, addr: u16, val: u8);
-    fn prg_size(&self) -> u16;
-
-    // CHR
-    fn chr_read(&self, addr: u16) -> u8;
-    fn chr_write(&mut self, addr: u16, val: u8);
-    fn chr_size(&self) -> u16;
+#[track_caller]
+fn unknown_address(addr: usize) -> ! {
+    panic!("Invalid access of unknown address {:#X}", addr);
 }
 
-// FIXME: Can we clone these? Wouldn't they need to be consistent
-impl Clone for Box<dyn Mapper> {
-    fn clone(&self) -> Self {
-        self.box_clone()
-    }
+pub trait Mapper {
+    fn number(&self) -> u8;
+    fn prg_read(&self, addr: u16) -> u8;
+    fn prg_write(&mut self, addr: u16, val: u8);
+    fn chr(&self) -> ROM;
+    fn dpcm(&self) -> ROM;
 }
 
 impl fmt::Debug for Box<dyn Mapper> {
     fn fmt(&self, f: &mut fmt::Formatter<'_>) -> fmt::Result {
-        f.debug_struct("Mapper")
-            .field("mapper_num", &self.get_num())
-            .field("prg_size", &self.prg_size())
-            .field("chr_size", &self.chr_size())
-            .finish()
+        f.debug_struct(&format!("Mapper{}", self.number())).finish()
     }
 }
 
@@ -74,8 +56,7 @@ pub fn create_mapper(header: &Header, data: &[u8]) -> Box<dyn Mapper> {
     match header.get_mapper_num() {
         0 => Box::new(Mapper0::new(header, data)),
         1 => Box::new(Mapper1::new(header, data)),
-        3 => Box::new(Mapper3::new(header, data)),
-        n => unreachable!("Unimplemented mapper {}!", n),
+        n => panic!("Unimplemented mapper {}!", n),
     }
 }
 

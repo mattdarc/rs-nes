@@ -1,3 +1,5 @@
+use crate::cartridge::{Cartridge, CartridgeInterface};
+use crate::memory::ROM;
 use tracing::{event, Level};
 
 struct ApuStatus;
@@ -27,13 +29,13 @@ pub struct APU {
 }
 
 impl APU {
-    pub fn new(dpcm_samples: Vec<u8>) -> Self {
+    pub fn new(game: &Cartridge) -> Self {
         APU {
             pulse_1: Pulse::default(),
             pulse_2: Pulse::default(),
             triangle: Triangle::default(),
             noise: Noise::default(),
-            dmc: Dmc::new(dpcm_samples),
+            dmc: Dmc::new(game.dpcm()),
         }
     }
     pub fn register_read(&mut self, addr: u16) -> u8 {
@@ -107,11 +109,11 @@ struct Dmc {
     sample_addr: usize,
     sample_len: u16,
 
-    samples: Vec<u8>,
+    samples: ROM,
 }
 
 impl Dmc {
-    fn new(samples: Vec<u8>) -> Self {
+    fn new(samples: ROM) -> Self {
         // FIXME: The samples we get from the cartridge should be all possible samples
         // assert_eq!(samples.len(), std::u8::MAX as usize * 16 + 1);
 

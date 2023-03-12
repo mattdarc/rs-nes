@@ -5,7 +5,7 @@ mod sprite;
 use crate::cartridge::header::{Header, Mirroring};
 use crate::cartridge::{Cartridge, CartridgeInterface};
 use crate::graphics::Renderer;
-use crate::memory::RAM;
+use crate::memory::{RAM, ROM};
 use flags::*;
 use registers::*;
 use sprite::Sprite;
@@ -73,11 +73,9 @@ impl Default for OamSecondary {
 
 pub struct PPU {
     frame_buf: Vec<u8>,
-    cartridge: Cartridge,
 
-    // Cache the header in the PPU so we don't need to keep dispatching to the shared cartridge.
-    // The header will not change for the lifetime of the game
     cartridge_header: Header,
+    cartridge_chr: ROM,
 
     registers: Registers,
     flags: Flags,
@@ -122,7 +120,8 @@ fn to_u8_slice(x: u32) -> [u8; 4] {
 /// Vertical:
 ///   [ A ] [ B ]
 ///   [ a ] [ b ]
-fn mirror(mirror: &Mirroring, addr: u16) -> u16 {
+fn mirror(mirror: &Mirroring, addr: u16) -> usize {
+    let addr = addr as usize;
     (addr & !0xFFF)
         | match mirror {
             // AaBb
@@ -143,10 +142,11 @@ fn tile_lohi_to_idx(low: u8, high: u8) -> [u8; 8] {
     color_idx
 }
 
-const PPU_VRAM_SIZE: u16 = 0x2000;
+const PPU_VRAM_SIZE: usize = 0x2000;
 impl PPU {
-    pub fn new(cartridge: Cartridge, renderer: Box<dyn Renderer>) -> Self {
+    pub fn new(cartridge: &Cartridge, renderer: Box<dyn Renderer>) -> Self {
         let cartridge_header = cartridge.header();
+        let cartridge_chr = cartridge.chr();
 
         let mut tile_q = VecDeque::with_capacity(3);
         tile_q.push_back(Tile::default());
@@ -155,7 +155,7 @@ impl PPU {
 
         PPU {
             frame_buf: vec![0_u8; FRAME_SIZE_BYTES],
-            cartridge,
+            cartridge_chr,
             cartridge_header,
             palette_table: [0; 32],
             registers: Registers::default(),
@@ -310,7 +310,7 @@ impl PPU {
             0x2000..=0x3EFF => {
                 let vram_offset =
                     mirror(self.cartridge_header.get_mirroring(), addr) - PPU_VRAM_SIZE;
-                self.vram.write(vram_offset, val)
+                self.vram[vram_offset] = val;
             }
 
             // $3F00-$3F1F: Palette RAM
@@ -323,13 +323,13 @@ impl PPU {
     fn ppu_internal_read(&mut self, addr: u16) -> u8 {
         match addr {
             // Pattern tables 0 and 1
-            0..=0x1FFF => self.cartridge.chr_read(addr),
+            0..=0x1FFF => self.cartridge_chr[addr as usize],
 
             // Nametables
             0x2000..=0x3EFF => {
                 let vram_offset =
                     mirror(self.cartridge_header.get_mirroring(), addr) - PPU_VRAM_SIZE;
-                self.vram.read(vram_offset)
+                self.vram[vram_offset]
             }
 
             // $3F00-$3F1F: Palette RAM
@@ -859,10 +859,10 @@ impl PPU {
         let mut buf = vec![0_u8; FRAME_SIZE_BYTES / 2];
 
         let read_tile_lohi = |addr: u16| -> (u8, u8) {
-            const HIGH_OFFSET_BYTES: u16 = 8;
+            const HIGH_OFFSET_BYTES: usize = 8;
             (
-                self.cartridge.chr_read(addr),
-                self.cartridge.chr_read(addr + HIGH_OFFSET_BYTES),
+                self.cartridge_chr[addr as usize],
+                self.cartridge_chr[addr as usize + HIGH_OFFSET_BYTES],
             )
         };
 

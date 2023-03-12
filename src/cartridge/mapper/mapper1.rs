@@ -1,7 +1,6 @@
 use super::*;
 use crate::memory::*;
 
-#[derive(Clone)]
 pub struct Mapper1 {
     prg_rom: ROM, // for CPU
     prg_ram: RAM, // for CPU
@@ -20,43 +19,64 @@ impl Mapper1 {
 }
 
 impl Mapper for Mapper1 {
-    fn get_num(&self) -> u8 {
+    fn number(&self) -> u8 {
         1
     }
 
-    fn box_clone(&self) -> Box<dyn Mapper> {
-        Box::new(self.clone())
-    }
-
     fn prg_read(&self, addr: u16) -> u8 {
+        let addr = addr as usize;
         match addr {
-            0x6000..=0x7FFF => self.prg_ram.read(addr - 0x6000),
-            0x8000..=0xFFFF => self.prg_rom.read(addr - 0x8000),
-            _ => unreachable!("Invalid read of address {:#X}!", addr),
+            0x6000..=0x7FFF => self.prg_ram[addr - 0x6000],
+            0x8000..=0xFFFF => self.prg_rom[addr - 0x8000],
+            _ => unknown_address(addr),
         }
     }
 
     fn prg_write(&mut self, addr: u16, val: u8) {
+        let addr = addr as usize;
         match addr {
-            0x6000..=0x7FFF => self.prg_ram.write(addr - 0x6000, val),
-            0x8000..=0xFFFF => unreachable!("Tried to write to ROM at address {}!", addr),
-            _ => unreachable!("Invalid read of address {}!", addr),
+            0x6000..=0x7FFF => self.prg_ram[addr - 0x6000] = val,
+            0x8000..=0xFFFF => self.prg_rom[addr - 0x8000] = val,
+            _ => unknown_address(addr),
         };
     }
 
-    fn prg_size(&self) -> u16 {
-        self.prg_rom.len() + self.prg_ram.len()
-    }
-
     fn chr_read(&self, addr: u16) -> u8 {
-        self.chr_ram.read(addr)
+        self.chr_ram[addr as usize]
     }
 
     fn chr_write(&mut self, addr: u16, val: u8) {
-        self.chr_ram.write(addr, val)
+        self.chr_ram[addr as usize] = val;
     }
 
-    fn chr_size(&self) -> u16 {
-        self.chr_ram.len()
+    fn dpcm(&self) -> ROM {
+        ROM::with_data(self.map_range(0xC000, 0xFFF1 - 0xC000))
+    }
+
+    fn chr(&self) -> ROM {
+        ROM::with_data(&self.chr_ram)
+    }
+}
+
+impl Mapper1 {
+    fn map_range(&self, base: usize, len: usize) -> &[u8] {
+        assert!((base & 0xFFFF) == base);
+        assert!(len > 0);
+
+        match base {
+            0x6000..=0x7FFF => {
+                let offset = base - 0x6000;
+                assert!(offset + len < self.prg_ram.len());
+
+                &self.prg_ram[offset..(offset + len)]
+            }
+            0x8000..=0xFFFF => {
+                let offset = base - 0x8000;
+                assert!(offset + len < self.prg_rom.len());
+
+                &self.prg_rom[offset..(offset + len)]
+            }
+            _ => unknown_address(base),
+        }
     }
 }

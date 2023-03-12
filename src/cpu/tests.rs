@@ -4,7 +4,7 @@ use crate::memory::{RAM, ROM};
 use instructions::AddressingMode::*;
 use instructions::InstrName::*;
 
-const TEST_PROGRAM_START: u16 = 0x7FF0;
+const TEST_PROGRAM_START: usize = 0x7FF0;
 
 struct TestBus {
     program: ROM,
@@ -22,16 +22,18 @@ impl TestBus {
 
 impl Bus for TestBus {
     fn read(&mut self, addr: u16) -> u8 {
+        let addr = addr as usize;
         match addr {
-            TEST_PROGRAM_START..=0xFFFF => self.program.read(addr),
-            _ => self.ram.read(addr % 0x800),
+            TEST_PROGRAM_START..=0xFFFF => self.program[addr],
+            _ => self.ram[addr % 0x800],
         }
     }
 
     fn write(&mut self, addr: u16, val: u8) {
+        let addr = addr as usize;
         match addr {
-            TEST_PROGRAM_START..=0xFFFF => panic!("Cannot write to ROM"),
-            _ => self.ram.write(addr % 0x800, val),
+            TEST_PROGRAM_START..=0xFFFF => self.program[addr] = val,
+            _ => self.ram[addr % 0x800] = val,
         }
     }
 

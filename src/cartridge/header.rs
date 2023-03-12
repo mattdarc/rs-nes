@@ -13,8 +13,8 @@ pub enum ROMFormat {
 #[derive(Clone, Debug)]
 pub struct Header {
     // Byte 6
-    prg_rom_size: u8,
-    chr_ram_size: u8,
+    prg_rom_size: usize,
+    chr_ram_size: usize,
     ignore_mirror_ctrl: bool,
     has_trainer: bool,
     has_persistent_mem: bool,
@@ -23,23 +23,23 @@ pub struct Header {
     // Byte 7
     mapper_num: u8,
     format: ROMFormat,
-    prg_ram_size: u8,
+    prg_ram_size: usize,
 }
 
-const SIZE_8KB: u16 = 8 * 1024;
-const SIZE_16KB: u16 = 16 * 1024;
+const SIZE_8KB: usize = 8 * 1024;
+const SIZE_16KB: usize = 16 * 1024;
 
 impl Header {
-    pub fn get_prg_rom_size(&self) -> u16 {
-        self.prg_rom_size as u16 * SIZE_16KB
+    pub fn get_prg_rom_size(&self) -> usize {
+        self.prg_rom_size * SIZE_16KB
     }
 
-    pub fn get_chr_ram_size(&self) -> u16 {
-        self.chr_ram_size as u16 * SIZE_8KB
+    pub fn get_chr_ram_size(&self) -> usize {
+        self.chr_ram_size * SIZE_8KB
     }
 
-    pub fn get_prg_ram_size(&self) -> u16 {
-        std::cmp::max(self.prg_ram_size as u16 * SIZE_8KB, SIZE_8KB)
+    pub fn get_prg_ram_size(&self) -> usize {
+        std::cmp::max(self.prg_ram_size * SIZE_8KB, SIZE_8KB)
     }
 
     pub fn get_mapper_num(&self) -> u8 {
@@ -63,8 +63,8 @@ impl std::convert::From<&[u8; 16]> for Header {
         // 9: Flags 9 - TV system (rarely used extension)
         // 10: Flags 10 - TV system, PRG-RAM presence (unofficial, rarely used extension)
         // 11-15: Unused padding (should be filled with zero, but some rippers put their name across bytes 7-15)
-        let prg_rom_size = header[4];
-        let chr_ram_size = header[5];
+        let prg_rom_size = header[4] as usize;
+        let chr_ram_size = header[5] as usize;
 
         let flags_6 = &header[6];
         let ignore_mirror_ctrl = (0x8 & flags_6) != 0;
@@ -82,7 +82,7 @@ impl std::convert::From<&[u8; 16]> for Header {
             _ => ROMFormat::INES,
         };
 
-        let prg_ram_size = std::cmp::max(1, header[8]);
+        let prg_ram_size = std::cmp::max(1, header[8]) as usize;
         Header {
             prg_rom_size,
             chr_ram_size,

@@ -1,6 +1,7 @@
 pub mod header;
 mod mapper;
 
+use crate::memory::ROM;
 use header::Header;
 use mapper::*;
 use std::cell::RefCell;
@@ -14,13 +15,12 @@ pub trait CartridgeInterface {
     fn load(filename: &str) -> std::io::Result<Cartridge>;
     fn prg_read(&self, addr: u16) -> u8;
     fn prg_write(&self, addr: u16, val: u8);
-    fn chr_read(&self, addr: u16) -> u8;
-    fn chr_write(&self, addr: u16, val: u8);
     fn header(&self) -> Header;
-    fn dpcm_read(&self) -> Vec<u8>;
+    fn dpcm(&self) -> ROM;
+    fn chr(&self) -> ROM;
 }
 
-#[derive(Debug, Default, Clone)]
+#[derive(Debug, Default)]
 pub struct CartridgeImpl {
     name: String,
     header: Header,
@@ -66,20 +66,16 @@ impl CartridgeInterface for Cartridge {
         self.borrow_mut().mapper.prg_write(addr, val);
     }
 
-    fn chr_read(&self, addr: u16) -> u8 {
-        self.borrow().mapper.chr_read(addr)
-    }
-
-    fn chr_write(&self, addr: u16, val: u8) {
-        self.borrow_mut().mapper.chr_write(addr, val);
-    }
-
     fn header(&self) -> Header {
         self.borrow().header.clone()
     }
 
-    fn dpcm_read(&self) -> Vec<u8> {
-        Vec::new()
+    fn dpcm(&self) -> ROM {
+        self.borrow_mut().mapper.dpcm()
+    }
+
+    fn chr(&self) -> ROM {
+        self.borrow_mut().mapper.chr()
     }
 }
 
@@ -105,8 +101,6 @@ mod tests {
             Ok(cart) => cart,
             Err(e) => unreachable!("Error {:?}", e),
         };
-        assert!(cart.borrow().mapper.prg_size() > 0);
-        assert!(cart.borrow().mapper.chr_size() > 0);
         assert_eq!(cart.get_name(), exp_name);
     }
 }
