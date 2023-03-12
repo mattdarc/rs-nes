@@ -21,8 +21,6 @@ impl Mapper0 {
     }
 
     pub fn new(header: &Header, data: &[u8]) -> Self {
-        //dump_game(header, data);
-
         let (prg, chr) = data.split_at(header.get_prg_rom_size() as usize);
         Mapper0 {
             prg_rom: ROM::with_data_and_size(prg, header.get_prg_rom_size()),
@@ -41,7 +39,6 @@ impl Mapper for Mapper0 {
         Box::new(self.clone())
     }
 
-    // PRG
     fn prg_read(&self, addr: u16) -> u8 {
         match addr {
             0x6000..=0x7FFF => self.prg_ram.read(addr - 0x6000),
@@ -62,7 +59,6 @@ impl Mapper for Mapper0 {
         self.prg_rom.len() + self.prg_ram.len()
     }
 
-    // CHR
     fn chr_read(&self, addr: u16) -> u8 {
         self.chr_ram.read(addr)
     }

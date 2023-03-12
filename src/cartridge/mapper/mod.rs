@@ -47,6 +47,7 @@ pub trait Mapper {
     fn chr_size(&self) -> u16;
 }
 
+// FIXME: Can we clone these? Wouldn't they need to be consistent
 impl Clone for Box<dyn Mapper> {
     fn clone(&self) -> Self {
         self.box_clone()
@@ -82,6 +83,7 @@ pub fn create_mapper(header: &Header, data: &[u8]) -> Box<dyn Mapper> {
 pub mod test {
     use super::*;
 
+    // FIXME: Maybe this is how I should launch nestest instead of `reset_vector_override`
     // Create a test mapper, setting the reset vector to the first instruction
     pub fn mapper_with(data: &[u8], reset_vector: u16) -> Box<dyn Mapper> {
         let header = Header::default();

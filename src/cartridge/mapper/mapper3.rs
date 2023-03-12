@@ -28,7 +28,6 @@ impl Mapper for Mapper3 {
         Box::new(self.clone())
     }
 
-    // PRG
     fn prg_read(&self, addr: u16) -> u8 {
         match addr {
             0x0000..=0x7FFF => self.prg_rom.read(addr - 0x8000),
@@ -48,7 +47,6 @@ impl Mapper for Mapper3 {
         self.prg_rom.len()
     }
 
-    // CHR
     fn chr_read(&self, addr: u16) -> u8 {
         self.chr_ram.read(addr)
     }

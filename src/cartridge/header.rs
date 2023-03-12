@@ -26,20 +26,20 @@ pub struct Header {
     prg_ram_size: u8,
 }
 
+const SIZE_8KB: u16 = 8 * 1024;
+const SIZE_16KB: u16 = 16 * 1024;
+
 impl Header {
     pub fn get_prg_rom_size(&self) -> u16 {
-        const UNIT: u16 = 16 * 1024; // 16 KB
-        self.prg_rom_size as u16 * UNIT
+        self.prg_rom_size as u16 * SIZE_16KB
     }
 
     pub fn get_chr_ram_size(&self) -> u16 {
-        const UNIT: u16 = 8 * 1024; // 8 KB
-        self.chr_ram_size as u16 * UNIT
+        self.chr_ram_size as u16 * SIZE_8KB
     }
 
     pub fn get_prg_ram_size(&self) -> u16 {
-        const UNIT: u16 = 8 * 1024; // 8 KB
-        std::cmp::max(self.prg_ram_size as u16 * UNIT, UNIT)
+        std::cmp::max(self.prg_ram_size as u16 * SIZE_8KB, SIZE_8KB)
     }
 
     pub fn get_mapper_num(&self) -> u8 {

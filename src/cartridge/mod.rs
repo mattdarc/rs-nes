@@ -17,6 +17,7 @@ pub trait CartridgeInterface {
     fn chr_read(&self, addr: u16) -> u8;
     fn chr_write(&self, addr: u16, val: u8);
     fn header(&self) -> Header;
+    fn dpcm_read(&self) -> Vec<u8>;
 }
 
 #[derive(Debug, Default, Clone)]
@@ -58,6 +59,10 @@ impl CartridgeInterface for Cartridge {
     }
 
     fn prg_write(&self, addr: u16, val: u8) {
+        // dpcm_read assumes that these bytes never change. If this happens we have to update how
+        // we pass the samples to the APU
+        assert!(addr <= 0xC000);
+
         self.borrow_mut().mapper.prg_write(addr, val);
     }
 
@@ -71,6 +76,10 @@ impl CartridgeInterface for Cartridge {
 
     fn header(&self) -> Header {
         self.borrow().header.clone()
+    }
+
+    fn dpcm_read(&self) -> Vec<u8> {
+        Vec::new()
     }
 }
 
