@@ -41,14 +41,6 @@ impl Mapper for Mapper1 {
         };
     }
 
-    fn chr_read(&self, addr: u16) -> u8 {
-        self.chr_ram[addr as usize]
-    }
-
-    fn chr_write(&mut self, addr: u16, val: u8) {
-        self.chr_ram[addr as usize] = val;
-    }
-
     fn dpcm(&self) -> ROM {
         ROM::with_data(self.map_range(0xC000, 0xFFF1 - 0xC000))
     }

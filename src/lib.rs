@@ -48,13 +48,13 @@ unsafe impl<'a> Send for VNES<'a> {}
 
 impl<'a> VNES<'a> {
     pub fn new(rom: &str) -> std::io::Result<Self> {
-        let game = Cartridge::load(rom)?;
+        let game = load_cartridge(rom)?;
         let bus = NesBus::new(game, Box::new(graphics::sdl2::SDLRenderer::new()));
         Ok(VNES { cpu: CPU::new(bus) })
     }
 
     pub fn new_headless(rom: &str) -> std::io::Result<Self> {
-        let game = Cartridge::load(rom)?;
+        let game = load_cartridge(rom)?;
         let bus = NesBus::new(game, Box::new(graphics::nop::NOPRenderer::new()));
         Ok(VNES { cpu: CPU::new(bus) })
     }
