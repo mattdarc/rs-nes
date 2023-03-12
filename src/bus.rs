@@ -30,7 +30,7 @@ pub struct NesBus {
     _controller1: Controller,
     _controller2: Controller,
     ppu: PPU,
-    _apu: APU,
+    apu: APU,
     cpu_ram: RAM,
     cycles: usize,
     nmi: Option<u8>,
@@ -40,12 +40,14 @@ pub struct NesBus {
 
 impl NesBus {
     pub fn new(game: Cartridge, renderer: Box<dyn Renderer>) -> Self {
+        let dpcm_samples = game.dpcm_read();
+
         NesBus {
             game: game.clone(),
             _controller1: Controller::new(),
             _controller2: Controller::new(),
             ppu: PPU::new(game, renderer),
-            _apu: APU::new(),
+            apu: APU::new(dpcm_samples),
             cpu_ram: RAM::with_size(0x800),
             nmi: None,
 
@@ -74,10 +76,7 @@ impl Bus for NesBus {
         let value = match addr {
             0x0..=0x1FFF => self.cpu_ram.read(addr & 0x7FF),
             0x2000..=0x3FFF => self.ppu.register_read(addr - 0x2000),
-            0x4000..=0x4015 => {
-                event!(Level::DEBUG, "read from APU");
-                0
-            }
+            0x4000..=0x4015 => self.apu.register_read(addr - 0x4000),
             0x4016 => {
                 event!(Level::DEBUG, "read from controller 1");
                 0
@@ -90,6 +89,7 @@ impl Bus for NesBus {
                 event!(Level::DEBUG, "read from APU.test");
                 0
             }
+            // NOTE: Cartridges use absolute addresses
             0x4020..=0xFFFF => self.game.prg_read(addr),
         };
         value
@@ -102,11 +102,10 @@ impl Bus for NesBus {
         match addr {
             0x0..=0x1FFF => self.cpu_ram.write(addr & 0x7FF, val),
             0x2000..=0x3FFF => self.ppu.register_write(addr - 0x2000, val),
-            0x4000..0x4014 | 0x4015 => {} // self.apu.write_register(addr - 0x4000, val),
+            0x4000..0x4014 | 0x4015 => self.apu.register_write(addr - 0x4000, val),
             // NOTE: Controllers can be written to to enable strobe mode
             0x4016 => event!(Level::DEBUG, "write to controller 1"),
             0x4017 => event!(Level::DEBUG, "write to controller 2"),
-            0x4020..=0xFFFF => self.game.prg_write(addr, val),
             0x4014 => {
                 // FIXME: Could make this a direct access from the page and not a bunch of bus reads
                 const PAGE_SIZE: u16 = 256;
@@ -128,6 +127,8 @@ impl Bus for NesBus {
                 );
                 self.ppu.oam_dma(dma_buffer.as_slice());
             }
+            // NOTE: Cartridges use absolute addresses
+            0x4020..=0xFFFF => self.game.prg_write(addr, val),
             _ => unreachable!(),
         }
     }
