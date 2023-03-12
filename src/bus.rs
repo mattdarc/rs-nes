@@ -69,8 +69,6 @@ impl NesBus {
 impl Bus for NesBus {
     #[tracing::instrument(target = "bus", level = Level::DEBUG, skip(self))]
     fn read(&mut self, addr: u16) -> u8 {
-        // FIXME: *Could* make each of these components conform to a common interface which has
-        // read/write register, but the NES is fixed HW so I don't see the benefit ATM
         let value = match addr {
             0x0..=0x1FFF => self.cpu_ram[addr as usize & 0x7FF],
             0x2000..=0x3FFF => self.ppu.register_read(addr - 0x2000),
@@ -105,24 +103,28 @@ impl Bus for NesBus {
             0x4016 => event!(Level::DEBUG, "write to controller 1"),
             0x4017 => event!(Level::DEBUG, "write to controller 2"),
             0x4014 => {
-                // FIXME: Could make this a direct access from the page and not a bunch of bus reads
-                const PAGE_SIZE: u16 = 256;
+                event!(
+                    Level::DEBUG,
+                    "CYC:{} OAMDMA from 0x{:04X}",
+                    self.cycles(),
+                    (val as u16) << 8
+                );
 
                 // Writing $XX will upload 256 bytes of data from CPU page $XX00-$XXFF to the
                 // internal PPU OAM. This page is typically located in internal RAM, commonly
                 // $0200-$02FF, but cartridge RAM or ROM can be used as well.
                 //
                 // https://www.nesdev.org/wiki/PPU_registers#OAMDATA
-                let dma_buffer = (0..PAGE_SIZE)
+                const PAGE_SIZE: usize = 256;
+                if val < 0x20 {
+                    let page = ((val as usize) << 8) & 0x7FF;
+                    self.ppu.oam_dma(&self.cpu_ram[page..(page + PAGE_SIZE)]);
+                    return;
+                }
+
+                let dma_buffer = (0..PAGE_SIZE as u16)
                     .map(|lo| self.read((val as u16) << 8 | lo))
                     .collect::<Vec<_>>();
-
-                event!(
-                    Level::INFO,
-                    "CYC:{} OAMDMA from 0x{:04X}",
-                    self.cycles(),
-                    (val as u16) << 8
-                );
                 self.ppu.oam_dma(dma_buffer.as_slice());
             }
             // NOTE: Cartridges use absolute addresses

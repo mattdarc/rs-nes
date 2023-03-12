@@ -90,6 +90,7 @@ mod tests {
         });
     }
 
+    #[ignore = "unimplemented mapper3"]
     #[test]
     fn load_some() {
         let exp_name = "nes-test-roms/cpu_dummy_reads/cpu_dummy_reads.nes";

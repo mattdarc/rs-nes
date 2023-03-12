@@ -114,9 +114,6 @@ struct Dmc {
 
 impl Dmc {
     fn new(samples: ROM) -> Self {
-        // FIXME: The samples we get from the cartridge should be all possible samples
-        // assert_eq!(samples.len(), std::u8::MAX as usize * 16 + 1);
-
         Dmc {
             irq_en: false,
             dmc_loop: false,

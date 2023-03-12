@@ -117,7 +117,7 @@ impl<'a, BusType: Bus> CpuInterface for CPU<'a, BusType> {
             pc: self.old_pc,
             sp: self.sp,
             status: self.status.to_u8(),
-            scanline,
+            scanline: scanline + 1, // nestest starts the PPU at the first scanline
             ppu_cycle,
         }
     }
