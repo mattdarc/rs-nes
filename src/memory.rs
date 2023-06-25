@@ -43,6 +43,6 @@ impl DerefMut for RAM {
 
 impl DerefMut for ROM {
     fn deref_mut(&mut self) -> &mut Self::Target {
-        unreachable!("Cannot write to ROM")
+        panic!("Cannot write to ROM")
     }
 }
