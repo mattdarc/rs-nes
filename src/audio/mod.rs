@@ -23,9 +23,11 @@ impl AudioCallback for SquareWave {
     }
 }
 
+#[cfg(test)]
 mod tests {
     use super::*;
 
+    #[ignore = "no audio"]
     #[test]
     fn example() {
         let sdl_context = sdl2::init().unwrap();
