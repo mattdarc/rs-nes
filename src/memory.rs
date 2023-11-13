@@ -17,7 +17,7 @@ impl<const ReadOnly: bool> Memory<ReadOnly> {
     pub fn with_data_and_size(data: &[u8], size: usize) -> Self {
         let mut memory = vec![0_u8; size];
         memory.resize(size, 0);
-        memory.copy_from_slice(&data[0..(size as usize).min(data.len())]);
+        memory.copy_from_slice(&data[0..data.len()]);
 
         Memory(memory)
     }

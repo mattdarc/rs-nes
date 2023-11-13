@@ -2,7 +2,7 @@ use tracing::Level;
 use tracing_subscriber::{fmt, prelude::*, Layer};
 use venus::VNES;
 
-const DEBUG_COMPONENT: &'static str = "cpu";
+const DEBUG_COMPONENTS: &'static [&str] = &["cpu", "cartridge::mapper", "bus"];
 
 fn init_tracing() {
     let mut layers = Vec::new();
@@ -12,7 +12,7 @@ fn init_tracing() {
         fmt::layer()
             .with_ansi(false) // No colors
             .with_level(false) // include levels in formatted output
-            .with_target(false) // don't include targets
+            .with_target(true) // don't include targets
             .with_thread_ids(false) // include the thread ID of the current thread
             .with_thread_names(false) // include the name of the current thread
             .without_time()
@@ -20,7 +20,9 @@ fn init_tracing() {
             .compact()
             .with_filter(tracing_subscriber::filter::filter_fn(|metadata| {
                 // FIXME: Make this a runtime-decision with an argument parser
-                (metadata.target() == format!("venus::{}", DEBUG_COMPONENT))
+                DEBUG_COMPONENTS
+                    .iter()
+                    .any(|c| metadata.target() == format!("venus::{}", c))
                     && metadata.level() <= &Level::INFO
             }))
             .boxed(),
@@ -35,7 +37,9 @@ fn main() -> Result<(), String> {
     init_tracing();
 
     // FIXME: Make this a runtime-decision with an argument parser
-    let mut vnes = VNES::new("roms/mario-bros.nes").unwrap();
+    let mut vnes =
+        VNES::new("/Users/matt/rs-nes/nes-test-roms/nes_instr_test/rom_singles/01-implied.nes")
+            .unwrap();
     vnes.reset();
     let res = vnes.play();
 

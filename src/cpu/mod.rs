@@ -34,12 +34,20 @@ fn crosses_page(src: u16, dst: u16) -> bool {
 }
 
 const STACK_BEGIN: u16 = 0x0100;
-const IRQ_HANDLER_ADDR: u16 = 0xFFFA;
+
+//  ADDRESSES	 |  VECTOR
+// $FFFA, $FFFB	 |   NMI
+// $FFFC, $FFFD	 |   Reset
+// $FFFE, $FFFF	 |   IRQ/BRK
+// https://www.nesdev.org/wiki/NMI
+const NMI_VECTOR_START: u16 = 0xFFFA;
+const RESET_VECTOR_START: u16 = 0xFFFC;
+const IRQ_VECTOR_START: u16 = 0xFFFE;
+
 pub const NTSC_CLOCK: u32 = 1_789_773;
 pub const PAL_CLOCK: u32 = 1_662_607;
 
 // Exported for use in tests
-pub const RESET_VECTOR_START: u16 = 0xFFFC;
 
 enum TargetAddress {
     Memory(u16),
@@ -251,7 +259,7 @@ impl<'a, BusType: Bus> CPU<'a, BusType> {
 
         // Load address of interrupt handler, set PC to execute there
         self.bus.clock(2);
-        self.pc = self.bus.read16(IRQ_HANDLER_ADDR);
+        self.pc = self.bus.read16(NMI_VECTOR_START);
         event!(Level::TRACE, "IRQ: {:#04X}", self.pc);
     }
 
@@ -667,7 +675,7 @@ impl<'a, BusType: Bus> CPU<'a, BusType> {
         self.push16(self.pc.wrapping_add(2));
         self.php();
         self.status.set(Status::INT_DISABLE, true);
-        self.exit_status = ExitStatus::ExitInterrupt;
+        self.pc = self.bus.read16(NMI_VECTOR_START);
     }
 
     fn clc(&mut self) {

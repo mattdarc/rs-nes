@@ -57,12 +57,11 @@ impl CartridgeInterface for Cartridge {
 
 pub fn load_cartridge(filename: &str) -> Result<Cartridge, std::io::Error> {
     event!(Level::INFO, "Loading ROM: {:?}", filename);
+
     let mut fh = std::fs::File::open(filename)?;
     let mut header: [u8; 16] = [0; 16];
     fh.read_exact(&mut header)?;
     let header = Header::from(&header);
-    event!(Level::DEBUG, "Header: {:?}", &header);
-
     let data_size = header.get_prg_rom_size() + header.get_chr_ram_size();
     let mut data = vec![0; data_size as usize];
     fh.read_exact(&mut data)?;

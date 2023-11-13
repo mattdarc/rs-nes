@@ -20,6 +20,7 @@ mod memory;
 use cartridge::*;
 use cpu::*;
 use crossbeam::thread::scope;
+use std::sync::{atomic::AtomicBool, Arc};
 
 pub type NesBus = bus::NesBus;
 pub type NesCPU<'a> = CPU<'a, NesBus>;
@@ -91,10 +92,10 @@ impl<'a> VNES<'a> {
         ExitStatus::Breakpoint(self.cpu.pc())
     }
 
-    fn wait_for_interrupt(mut event_pump: sdl2::EventPump) {
+    fn wait_for_interrupt(mut event_pump: sdl2::EventPump, stop_token: Arc<AtomicBool>) {
         use sdl2::{event::Event, keyboard::Keycode};
 
-        loop {
+        while !stop_token.load(std::sync::atomic::Ordering::Acquire) {
             let event = event_pump.wait_event();
 
             match event {
@@ -102,7 +103,10 @@ impl<'a> VNES<'a> {
                 | Event::KeyDown {
                     keycode: Some(Keycode::Escape),
                     ..
-                } => return,
+                } => {
+                    stop_token.store(true, std::sync::atomic::Ordering::Release);
+                    return;
+                }
                 _ => {} // FIXME: Perhaps this should be recorded somewhere
             }
         }
@@ -111,13 +115,12 @@ impl<'a> VNES<'a> {
     pub fn play(&mut self) -> Result<(), String> {
         use graphics::sdl2::SDL2Intrf;
         use std::panic;
-        use std::sync::{atomic::AtomicBool, Arc};
 
-        let stop_request_recv = Arc::new(AtomicBool::new(false));
+        let stop_token_cpu = Arc::new(AtomicBool::new(false));
         let event_pump = SDL2Intrf::context().event_pump().unwrap();
 
         scope(|scope| {
-            let stop_request_send = stop_request_recv.clone();
+            let stop_token_main = stop_token_cpu.clone();
 
             // take_hook() returns the default hook in case when a custom one is not set
             let orig_hook = panic::take_hook();
@@ -131,7 +134,7 @@ impl<'a> VNES<'a> {
                 .builder()
                 .name("cpu-thread".to_owned())
                 .spawn(|_| {
-                    while !stop_request_recv.load(std::sync::atomic::Ordering::Acquire) {
+                    while !stop_token_cpu.load(std::sync::atomic::Ordering::Acquire) {
                         match self.run_once() {
                             ExitStatus::Continue => {}
                             ExitStatus::ExitError(e) => return Err(e),
@@ -139,7 +142,10 @@ impl<'a> VNES<'a> {
                             // FIXME: Need to figure out the proper way to handle breakpoints
                             ExitStatus::Breakpoint(_)
                             | ExitStatus::ExitSuccess
-                            | ExitStatus::ExitInterrupt => return Ok(()),
+                            | ExitStatus::ExitInterrupt => {
+                                stop_token_cpu.store(true, std::sync::atomic::Ordering::Release);
+                                return Ok(());
+                            }
                         }
                     }
 
@@ -147,9 +153,7 @@ impl<'a> VNES<'a> {
                 })
                 .unwrap();
 
-            VNES::wait_for_interrupt(event_pump);
-
-            stop_request_send.store(true, std::sync::atomic::Ordering::Release);
+            VNES::wait_for_interrupt(event_pump, stop_token_main);
             cpu_thread.join().unwrap()
         })
         .unwrap()

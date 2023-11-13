@@ -9,22 +9,32 @@ use super::header::Header;
 use crate::memory::ROM;
 use mapper0::Mapper0;
 use mapper1::Mapper1;
+use tracing;
+use tracing::Level;
 
 use std::fmt;
 
-pub const RESET_VECTOR_START: u16 = 0xC004;
-
 fn dump_game(header: &Header, game: &[u8]) {
+    println!("Header:\n {:?}", header);
     let (prg, chr) = game.split_at(header.get_prg_rom_size() as usize);
-    println!("PRG:");
-    for (addr, instr) in prg.iter().enumerate() {
-        println!(" 0x{:?}: {:?}", addr, instr);
-    }
 
-    println!("\nCHR:");
-    for (addr, data) in chr.iter().enumerate() {
-        println!(" 0x{:?}: {:?}", addr, data);
-    }
+    let print_data = |name, data: &[u8]| {
+        tracing::debug!("{}:", name);
+        for (addr, chunk) in data.chunks(16).enumerate() {
+            tracing::debug!(
+                " 0x{:<4x}| {}",
+                addr * 16,
+                chunk
+                    .iter()
+                    .map(|d| format!("{:0<2x}", d))
+                    .fold(String::new(), |acc, b| acc + " " + &b)
+            );
+        }
+        println!();
+    };
+
+    print_data("PRG", prg);
+    print_data("CHR", chr);
 }
 
 #[track_caller]
@@ -53,34 +63,13 @@ impl Default for Box<dyn Mapper> {
 }
 
 pub fn create_mapper(header: &Header, data: &[u8]) -> Box<dyn Mapper> {
+    if tracing::enabled!(Level::DEBUG) {
+        dump_game(header, data);
+    }
+
     match header.get_mapper_num() {
         0 => Box::new(Mapper0::new(header, data)),
         1 => Box::new(Mapper1::new(header, data)),
         n => panic!("Unimplemented mapper {}!", n),
-    }
-}
-
-#[cfg(test)]
-pub mod test {
-    use super::*;
-
-    // Create a test mapper, setting the reset vector to the first instruction
-    pub fn mapper_with(data: &[u8], reset_vector: u16) -> Box<dyn Mapper> {
-        let header = Header::default();
-        let mut rom = vec![0; header.get_prg_rom_size() as usize];
-
-        println!("-- Cloning data {:?} into ROM", data);
-        rom[0..data.len()].clone_from_slice(data);
-        let low = (reset_vector & 0xFF) as u8;
-        let high = (reset_vector >> 8) as u8;
-        let reset_loc = (RESET_VECTOR_START - reset_vector) as usize;
-
-        println!(
-            "-- Initializing ROM reset vector at {:#X} to {:#X}",
-            reset_loc, reset_vector
-        );
-        rom[reset_loc] = low;
-        rom[reset_loc + 1] = high;
-        super::create_mapper(&header, rom.as_slice())
     }
 }

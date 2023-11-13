@@ -88,6 +88,8 @@ impl Bus for NesBus {
             // NOTE: Cartridges use absolute addresses
             0x4020..=0xFFFF => self.game.prg_read(addr),
         };
+        self.dump_instr("read", addr, value);
+
         value
     }
 

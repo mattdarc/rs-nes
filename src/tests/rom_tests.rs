@@ -141,3 +141,11 @@ fn nestest() {
         }
     }
 }
+
+#[test]
+fn romtest() {
+    let mut nes = VNES::new("nes-test-roms/nes_instr_test/rom_singles/01-implied.nes")
+        .expect("Could not load nestest ROM");
+
+    nes.play().unwrap();
+}
