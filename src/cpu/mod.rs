@@ -22,6 +22,13 @@ fn is_bit_set(v: u8, bit: u8) -> bool {
 }
 
 #[inline]
+fn as_hex_digit(i: u8) -> u8 {
+    char::from_digit(i.into(), 16)
+        .expect("Out of range [0, 16)")
+        .to_ascii_uppercase() as u8
+}
+
+#[inline]
 fn crosses_page(src: u16, dst: u16) -> bool {
     (src & 0xFF00) != (dst & 0xFF00)
 }
@@ -251,16 +258,18 @@ impl<'a, BusType: Bus> CPU<'a, BusType> {
     fn trace_instruction(&self) {
         let (scanline, ppu_cycle) = self.bus.ppu_state();
 
-        let operands_as_str = || {
+        const BUFSZ: usize = 16;
+        let mut operands_str: [u8; BUFSZ] = [' ' as u8; BUFSZ];
+
+        if tracing::enabled!(Level::DEBUG) {
             // FIXME: This should be a stack-allocated string. In the hot loop like this we're
             // waiting on malloc for most of the time
-            let mut operands_str = String::new();
-            for op in &self.operands {
-                operands_str.push_str(&format!("{:02X} ", op));
+            for (i, op) in self.operands.iter().enumerate() {
+                operands_str[3 * i] = as_hex_digit(op >> 4);
+                operands_str[3 * i + 1] = as_hex_digit(op >> 4);
             }
-
-            operands_str
-        };
+            operands_str[BUFSZ - 1] = '\0' as u8;
+        }
 
         event!(
             Level::DEBUG,
@@ -268,7 +277,7 @@ impl<'a, BusType: Bus> CPU<'a, BusType> {
             self.instructions_executed,
             self.old_pc,
             self.instruction.opcode(),
-            operands_as_str(),
+            {std::str::from_utf8(&operands_str).unwrap()},
             self.instruction.name(),
             format!("{:?}", self.instruction.mode()),
             self.acc,
