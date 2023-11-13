@@ -274,7 +274,7 @@ impl PPU {
                 if self.scanline >= VISIBLE_SCANLINES as i16 {
                     self.registers.oamdata = val;
                 }
-                self.registers.oamaddr += 1;
+                self.registers.oamaddr = self.registers.oamaddr.wrapping_add(1);
             }
             5 => self.registers.addr.scroll_write(val),
             6 => self.registers.addr.addr_write(val),
