@@ -5,12 +5,6 @@ use tracing::{event, Level};
 struct ApuStatus;
 
 impl ApuStatus {
-    const W_DMC_ENABLE: u8 = 0x10;
-    const W_NOISE_ENABLE: u8 = 0x8;
-    const W_TRIANGLE_ENABLE: u8 = 0x4;
-    const W_PULSE1_ENABLE: u8 = 0x2;
-    const W_PULSE2_ENABLE: u8 = 0x1;
-
     const R_DMC_IRQ: u8 = 0x80;
     const R_FRAME_IRQ: u8 = 0x40;
     const R_DMC_ACTIVE: u8 = 0x10;
@@ -103,7 +97,13 @@ impl APU {
         status
     }
 
-    fn status_write(&self, val: u8) {}
+    fn status_write(&self, val: u8) {
+        let pulse1_en = val & 0x1;
+        let pulse2_en = val & 0x2;
+        let triangle_en = val & 0x4;
+        let noise_en = val & 0x8;
+        let dmc_en = val & 0x10;
+    }
 }
 
 struct Dmc {
@@ -126,7 +126,7 @@ struct Dmc {
 }
 
 impl Dmc {
-    fn new(samples: ROM) -> Self {
+    pub fn new(samples: ROM) -> Self {
         Dmc {
             irq_en: false,
             irq_raised: false,
@@ -145,6 +145,18 @@ impl Dmc {
 
             samples,
         }
+    }
+
+    pub fn enable(&mut self, en: bool) {
+        if en {
+            self.start_sampling();
+        } else {
+            self.bytes_remaining = 0;
+        }
+    }
+
+    pub fn dmc_update_irq(&mut self, assert: bool) {
+        self.irq_raised = self.irq_en && assert;
     }
 
     pub fn register_read(&mut self, addr: u16) -> u8 {
@@ -239,7 +251,7 @@ impl Dmc {
     }
 
     fn sample_byte(&mut self) -> Option<u8> {
-        if self.bytes_remaining {
+        if self.bytes_remaining == 0 {
             return None;
         }
 
@@ -250,8 +262,8 @@ impl Dmc {
         if self.bytes_remaining == 0 {
             if self.dmc_loop {
                 self.start_sampling();
-            } else if self.irq_en {
-                self.irq_raised = true;
+            } else {
+                self.dmc_update_irq(true);
             }
         }
 
@@ -261,14 +273,6 @@ impl Dmc {
     fn start_sampling(&mut self) {
         self.current_addr = self.sample_addr;
         self.bytes_remaining = self.sample_len;
-    }
-
-    pub fn enable(&mut self, en: bool) {
-        if en {
-            self.start_sampling();
-        } else {
-            self.bytes_remaining = 0;
-        }
     }
 }
 
@@ -312,64 +316,184 @@ impl Noise {
     }
 }
 
+// https://www.nesdev.org/wiki/APU_Sweep
 #[derive(Default)]
-struct Pulse {
-    v_loop: bool,
-    v_const: bool,
-    enabled: bool,
-    negate: bool,
-    shift: u8,
-    period: u8,
-    duty: u8,
-    envelope: u8,
-
-    length_load: u8,
-    timer_lo: u8,
-    timer_hi: u8,
+struct SweepUnit {
+    divider: Divider,
+    pub shift: u8,
+    pub reload_flag: bool,
+    pub enabled: bool,
+    pub negate_flag: bool,
 }
 
-impl Pulse {
-    fn register_read(&mut self, addr: u16) -> u8 {
-        match addr {
-            0 => {
-                (self.duty << 6)
-                    | ((self.v_loop as u8) << 5)
-                    | ((self.v_const as u8) << 4)
-                    | self.envelope
+impl SweepUnit {
+    pub fn clock(&mut self) -> u8 {
+        self.divider.clock()
+    }
+
+    pub fn shift(&mut self, val: u16) -> u16 {
+        let change = val >> self.shift;
+        if self.negate_flag {
+            val.checked_sub(change).unwrap_or(0)
+        } else {
+            val + change
+        }
+    }
+}
+
+// https://www.nesdev.org/wiki/APU_Envelope
+#[derive(Default)]
+struct EnvelopeGenerator {
+    divider: Divider,
+    decay_counter: u8,
+    volume: u8,
+    pub start_flag: bool,
+    pub const_flag: bool,
+    pub loop_flag: bool,
+}
+
+impl EnvelopeGenerator {
+    pub fn clock(&mut self) -> u8 {
+        if self.start_flag {
+            self.start_flag = false;
+            self.decay_counter = 0xf;
+            self.divider.reload();
+        } else {
+            let div_val = self.divider.clock();
+
+            if div_val == 1 {
+                if self.decay_counter == 0 {
+                    if self.loop_flag {
+                        self.decay_counter = 0xf;
+                    }
+                } else {
+                    self.decay_counter -= 1;
+                }
             }
-            1 => {
-                ((self.enabled as u8) << 7)
-                    | (self.period << 4)
-                    | ((self.negate as u8) << 3)
-                    | self.shift
-            }
-            2 => self.timer_lo,
-            3 => (self.length_load << 3) | self.timer_hi,
-            _ => unreachable!("Invalid read {}", addr),
+        }
+
+        if self.const_flag {
+            return self.volume;
+        } else {
+            return self.decay_counter;
         }
     }
 
-    fn register_write(&mut self, addr: u16, val: u8) {
+    pub fn set_v(&mut self, v: u8) {
+        self.volume = v;
+        self.divider.set_period(v.into());
+    }
+}
+
+#[derive(Default)]
+struct Divider {
+    reload: u16,
+    counter: u16,
+}
+
+// FIXME: Should these be implemented as LFSRs?
+impl Divider {
+    pub fn clock(&mut self) -> u8 {
+        if self.counter != 0 {
+            self.counter -= 1;
+            return 0;
+        }
+
+        self.counter = self.reload;
+        1
+    }
+
+    pub fn reload(&mut self) {
+        self.counter = self.reload;
+    }
+
+    pub fn set_period(&mut self, period: u16) {
+        self.reload = period;
+    }
+}
+
+#[derive(Default)]
+struct LengthCounter {
+    counter: u8,
+    pub enabled: bool,
+}
+
+impl LengthCounter {
+    pub fn clock(&mut self) -> u8 {
+        // FIXME:
+        0
+    }
+
+    pub fn load(&mut self, val: u8) {
+        const LENGTH_RELOAD_LUT: &[u8] = &[
+            10, 254, 20, 2, 40, 4, 80, 6, 160, 8, 60, 10, 14, 12, 26, 14, 12, 16, 24, 18, 48, 20,
+            96, 22, 192, 24, 72, 26, 16, 28, 32, 30,
+        ];
+
+        let val = val as usize;
+        assert!(val < LENGTH_RELOAD_LUT.len());
+        self.counter = LENGTH_RELOAD_LUT[val];
+    }
+}
+
+// FIXME: This is clocked every 1/2 frame, so two clocks may need to happen every frame
+#[derive(Default)]
+struct Pulse {
+    duty: u8,
+    envelope_gen: EnvelopeGenerator,
+    sweep: SweepUnit,
+    length_counter: LengthCounter,
+
+    target_period: u16,
+    current_period: u16,
+}
+
+impl Pulse {
+    pub fn clock(&mut self) -> u8 {
+        self.target_period = self.sweep.shift(self.current_period);
+
+        if self.is_muted() {
+            return 0;
+        }
+
+        // FIXME
+        return 0;
+    }
+
+    // FIXME: Implement open-bus if required. This could probably be done by returning an optional
+    // from the read methods. The bus can cache the last read value and return this instead to the
+    // CPU
+    pub fn register_read(&mut self, addr: u16) -> u8 {
+        event!(Level::INFO, "Pulse::register_read open bus ({:#X})", addr);
+        0xff
+    }
+
+    pub fn register_write(&mut self, addr: u16, val: u8) {
         match addr {
             0 => {
                 self.duty = val >> 6;
-                self.v_loop = (val & 0x20) != 0;
-                self.v_const = (val & 0x10) != 0;
-                self.envelope = val & 0xF;
+                self.envelope_gen.loop_flag = (val & 0x20) != 0;
+                self.envelope_gen.const_flag = (val & 0x10) != 0;
+                self.envelope_gen.set_v(val & 0xF);
             }
             1 => {
-                self.enabled = (val & 0x80) != 0;
-                self.period = (val & 0x70) >> 4;
-                self.negate = (val & 0x8) != 0;
-                self.shift = val & 0x7;
+                self.sweep.enabled = (val & 0x80) != 0;
+                self.sweep.divider.set_period((val as u16 & 0x70) >> 4);
+                self.sweep.negate_flag = (val & 0x8) != 0;
+                self.sweep.shift = val & 0x7;
             }
-            2 => self.timer_lo = val,
+            2 => self.current_period = (self.current_period & 0xff00) | val as u16,
             3 => {
-                self.length_load = val >> 3;
-                self.timer_hi = val & 0x7;
+                self.envelope_gen.start_flag = true;
+                self.length_counter.load(val >> 3);
+                self.current_period = (self.current_period & 0xff) | ((val as u16 & 0x7) << 8);
             }
             _ => unreachable!("Invalid write {}", addr),
         }
+    }
+
+    fn is_muted(&self) -> bool {
+        self.current_period < 8 || self.target_period > 0x7ff
     }
 }
 

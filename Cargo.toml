@@ -21,8 +21,8 @@ path = "src/tests/rom_tests.rs"
 name = "ppu_tests"
 path = "src/tests/ppu_tests.rs"
 
-[features]
-nestest = []
+[profile.release]
+debug = true
 
 # See more keys and their definitions at https://doc.rust-lang.org/cargo/reference/manifest.html
 
