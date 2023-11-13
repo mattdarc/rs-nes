@@ -48,7 +48,7 @@ impl Mapper for Mapper0 {
         let rom_size = self.prg_rom.len();
         match addr {
             0x6000..=0x7FFF => self.prg_ram[addr - 0x6000] = val,
-            0x8000..=0xBFFF => self.prg_rom[(addr - 0x8000) % rom_size] = val,
+            0x8000..=0xFFFF => self.prg_rom[(addr - 0x8000) % rom_size] = val,
             _ => unknown_address(addr),
         };
     }

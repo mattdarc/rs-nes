@@ -20,10 +20,11 @@ mod memory;
 use cartridge::*;
 use cpu::*;
 use crossbeam::thread::scope;
+use std::cell::RefCell;
 use std::sync::{atomic::AtomicBool, Arc};
 
 pub type NesBus = bus::NesBus;
-pub type NesCPU<'a> = CPU<'a, NesBus>;
+pub type NesCPU = CPU<NesBus>;
 
 #[derive(Debug)]
 pub enum NesError {
@@ -35,12 +36,18 @@ pub enum ExitStatus {
     Continue,
     Breakpoint(u16),
     ExitSuccess,
+    StopRequested(i32),
     ExitInterrupt, // TODO: Temporary. Used to exit nestest
     ExitError(String),
 }
 
+pub type CpuTask<'a> = Box<dyn FnMut(&mut dyn CpuInterface) + 'a>;
+type TaskList<'a> = RefCell<Vec<CpuTask<'a>>>;
+
 pub struct VNES<'a> {
-    cpu: cpu::CPU<'a, bus::NesBus>,
+    cpu: cpu::CPU<bus::NesBus>,
+    pre_execute_tasks: TaskList<'a>,
+    post_execute_tasks: TaskList<'a>,
 }
 
 type NesResult = Result<(), String>;
@@ -51,21 +58,41 @@ impl<'a> VNES<'a> {
     pub fn new(rom: &str) -> std::io::Result<Self> {
         let game = load_cartridge(rom)?;
         let bus = NesBus::new(game, Box::new(graphics::sdl2::SDLRenderer::new()));
-        Ok(VNES { cpu: CPU::new(bus) })
+        Ok(VNES {
+            cpu: CPU::new(bus),
+            pre_execute_tasks: TaskList::new(Vec::new()),
+            post_execute_tasks: TaskList::new(Vec::new()),
+        })
     }
 
     pub fn new_headless(rom: &str) -> std::io::Result<Self> {
         let game = load_cartridge(rom)?;
         let bus = NesBus::new(game, Box::new(graphics::nop::NOPRenderer::new()));
-        Ok(VNES { cpu: CPU::new(bus) })
+        Ok(VNES {
+            cpu: CPU::new(bus),
+            pre_execute_tasks: TaskList::new(Vec::new()),
+            post_execute_tasks: TaskList::new(Vec::new()),
+        })
     }
 
     pub fn add_pre_execute_task(&mut self, task: CpuTask<'a>) {
-        self.cpu.add_pre_execute_task(task);
+        self.pre_execute_tasks.borrow_mut().push(task);
     }
 
     pub fn add_post_execute_task(&mut self, task: CpuTask<'a>) {
-        self.cpu.add_post_execute_task(task);
+        self.post_execute_tasks.borrow_mut().push(task);
+    }
+
+    fn run_pre_execute_tasks(&mut self) {
+        for task in self.post_execute_tasks.borrow_mut().iter_mut() {
+            task(&mut self.cpu);
+        }
+    }
+
+    fn run_post_execute_tasks(&mut self) {
+        for task in self.post_execute_tasks.borrow_mut().iter_mut() {
+            task(&mut self.cpu);
+        }
     }
 
     pub fn nestest_reset_override(&mut self, pc: u16) {
@@ -77,7 +104,11 @@ impl<'a> VNES<'a> {
     }
 
     pub fn run_once(&mut self) -> ExitStatus {
-        self.cpu.clock()
+        self.run_pre_execute_tasks();
+        let status = self.cpu.clock();
+        self.run_post_execute_tasks();
+
+        status
     }
 
     pub fn run_until(&mut self, pc: u16) -> ExitStatus {
@@ -96,9 +127,12 @@ impl<'a> VNES<'a> {
         use sdl2::{event::Event, keyboard::Keycode};
 
         while !stop_token.load(std::sync::atomic::Ordering::Acquire) {
-            let event = event_pump.wait_event();
+            let event = event_pump.wait_event_timeout(100);
+            if event.is_none() {
+                continue;
+            }
 
-            match event {
+            match event.unwrap() {
                 Event::Quit { .. }
                 | Event::KeyDown {
                     keycode: Some(Keycode::Escape),
@@ -139,6 +173,15 @@ impl<'a> VNES<'a> {
                             ExitStatus::Continue => {}
                             ExitStatus::ExitError(e) => return Err(e),
 
+                            ExitStatus::StopRequested(code) => {
+                                stop_token_cpu.store(true, std::sync::atomic::Ordering::Release);
+                                if code == 0 {
+                                    return Ok(());
+                                } else {
+                                    return Err(format!("StopRequested: {}", code));
+                                }
+                            }
+
                             // FIXME: Need to figure out the proper way to handle breakpoints
                             ExitStatus::Breakpoint(_)
                             | ExitStatus::ExitSuccess
@@ -153,6 +196,8 @@ impl<'a> VNES<'a> {
                 })
                 .unwrap();
 
+            // FIXME: This should be re-worked such that we don't launch an SDL thread for the
+            // headless variant
             VNES::wait_for_interrupt(event_pump, stop_token_main);
             cpu_thread.join().unwrap()
         })

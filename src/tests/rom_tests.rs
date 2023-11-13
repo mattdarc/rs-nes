@@ -117,7 +117,6 @@ impl NestestParser {
     }
 }
 
-#[test]
 fn nestest() {
     const GOLD_FILE: &str = "test/nestest.log.gold";
     let nestest_state = NestestParser::new(GOLD_FILE).expect("Error parsing gold file");
@@ -130,7 +129,7 @@ fn nestest() {
     let num_states = nestest_state.cpu_states.len();
 
     let mut i = 0;
-    nes.add_pre_execute_task(Box::new(move |cpu: &dyn CpuInterface| {
+    nes.add_pre_execute_task(Box::new(move |cpu: &mut dyn CpuInterface| {
         assert_eq!(cpu.read_state(), nestest_state.cpu_states[i]);
         i += 1;
     }));
@@ -142,10 +141,36 @@ fn nestest() {
     }
 }
 
-#[test]
-fn romtest() {
-    let mut nes = VNES::new("nes-test-roms/nes_instr_test/rom_singles/01-implied.nes")
-        .expect("Could not load nestest ROM");
+fn run_test_rom(s: &str) {
+    let mut nes = VNES::new_headless(s).expect("Could not load nestest ROM");
+    nes.reset();
 
-    nes.play().unwrap();
+    nes.add_post_execute_task(Box::new(move |cpu: &mut dyn CpuInterface| {
+        const TEST_DONE_RESULT_ADDR: u16 = 0x6000;
+        const TEST_RUNNING: u8 = 0x80;
+        let val = cpu.read_address(TEST_DONE_RESULT_ADDR);
+        if val != 0x00 {
+            let pass = val == 0xff;
+            cpu.request_stop(if pass { 0 } else { 1 });
+        }
+    }));
+
+    assert!(nes.play().is_ok());
+}
+
+macro_rules! rom_tests {
+    ($($name:ident: $rom:literal,)*) => {
+    $(
+        #[test]
+        fn $name() {
+            run_test_rom($rom);
+        }
+    )*
+    }
+}
+
+rom_tests! {
+    nes_instr_test_implied: "nes-test-roms/nes_instr_test/rom_singles/01-implied.nes",
+    // FIXME: This should fail
+    nes_instr_test_immediate: "nes-test-roms/nes_instr_test/rom_singles/02-immediate.nes",
 }

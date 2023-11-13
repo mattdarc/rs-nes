@@ -6,7 +6,6 @@ use {
     crate::ExitStatus,
     instructions::Instruction,
     status::Status,
-    std::cell::RefCell,
     std::stringify,
     tracing::{event, span, Level},
 };
@@ -111,14 +110,13 @@ buildable!(CpuState; CpuStateBuilder {
     ppu_cycle: i16,
 });
 
-pub type CpuTask<'a> = Box<dyn FnMut(&dyn CpuInterface) + 'a>;
-type TaskList<'a> = RefCell<Vec<CpuTask<'a>>>;
-
 pub trait CpuInterface {
     fn read_state(&self) -> CpuState;
+    fn read_address(&mut self, addr: u16) -> u8;
+    fn request_stop(&mut self, code: i32);
 }
 
-impl<'a, BusType: Bus> CpuInterface for CPU<'a, BusType> {
+impl<BusType: Bus> CpuInterface for CPU<BusType> {
     fn read_state(&self) -> CpuState {
         let (scanline, ppu_cycle) = self.bus.ppu_state();
 
@@ -136,9 +134,17 @@ impl<'a, BusType: Bus> CpuInterface for CPU<'a, BusType> {
             ppu_cycle,
         }
     }
+
+    fn read_address(&mut self, addr: u16) -> u8 {
+        self.bus.read(addr)
+    }
+
+    fn request_stop(&mut self, code: i32) {
+        self.exit_status = ExitStatus::StopRequested(code);
+    }
 }
 
-pub struct CPU<'a, BusType: Bus> {
+pub struct CPU<BusType: Bus> {
     bus: BusType,
 
     acc: u8,
@@ -155,12 +161,9 @@ pub struct CPU<'a, BusType: Bus> {
 
     instructions_executed: usize,
     exit_status: ExitStatus,
-
-    pre_execute_tasks: TaskList<'a>,
-    post_execute_tasks: TaskList<'a>,
 }
 
-impl<'a, BusType: Bus> CPU<'a, BusType> {
+impl<BusType: Bus> CPU<BusType> {
     pub fn new(bus: BusType) -> Self {
         CPU {
             bus,
@@ -176,28 +179,6 @@ impl<'a, BusType: Bus> CPU<'a, BusType> {
             operands: Vec::new(),
             cycles: 0,
             instructions_executed: 0,
-            pre_execute_tasks: TaskList::new(Vec::new()),
-            post_execute_tasks: TaskList::new(Vec::new()),
-        }
-    }
-
-    pub fn add_pre_execute_task(&mut self, task: CpuTask<'a>) {
-        self.pre_execute_tasks.borrow_mut().push(task);
-    }
-
-    pub fn add_post_execute_task(&mut self, task: CpuTask<'a>) {
-        self.post_execute_tasks.borrow_mut().push(task);
-    }
-
-    fn run_pre_execute_tasks(&mut self) {
-        for task in self.pre_execute_tasks.borrow_mut().iter_mut() {
-            task(self);
-        }
-    }
-
-    fn run_post_execute_tasks(&mut self) {
-        for task in self.post_execute_tasks.borrow_mut().iter_mut() {
-            task(self);
         }
     }
 
@@ -231,6 +212,7 @@ impl<'a, BusType: Bus> CPU<'a, BusType> {
             "clock",
             cycles = self.bus.cycles()
         );
+
         {
             let _enter = cpu_span.enter();
 
@@ -239,9 +221,7 @@ impl<'a, BusType: Bus> CPU<'a, BusType> {
             } else {
                 self.fetch_instruction();
 
-                self.run_pre_execute_tasks();
                 self.execute_instruction();
-                self.run_post_execute_tasks();
 
                 self.instructions_executed += 1;
             }

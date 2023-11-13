@@ -37,7 +37,7 @@ impl CartridgeInterface for Cartridge {
     fn prg_write(&mut self, addr: u16, val: u8) {
         // dpcm_read assumes that these bytes never change. If this happens we have to update how
         // we pass the samples to the APU
-        assert!(addr <= 0xC000);
+        assert!(addr <= 0xC000, "Unexpected write to audio samples");
 
         self.mapper.prg_write(addr, val);
     }
