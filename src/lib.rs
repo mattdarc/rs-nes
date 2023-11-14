@@ -48,6 +48,7 @@ pub struct VNES<'a> {
     cpu: cpu::CPU<bus::NesBus>,
     pre_execute_tasks: TaskList<'a>,
     post_execute_tasks: TaskList<'a>,
+    headless: bool,
 }
 
 type NesResult = Result<(), String>;
@@ -62,6 +63,7 @@ impl<'a> VNES<'a> {
             cpu: CPU::new(bus),
             pre_execute_tasks: TaskList::new(Vec::new()),
             post_execute_tasks: TaskList::new(Vec::new()),
+            headless: false,
         })
     }
 
@@ -72,6 +74,7 @@ impl<'a> VNES<'a> {
             cpu: CPU::new(bus),
             pre_execute_tasks: TaskList::new(Vec::new()),
             post_execute_tasks: TaskList::new(Vec::new()),
+            headless: true,
         })
     }
 
@@ -123,11 +126,15 @@ impl<'a> VNES<'a> {
         ExitStatus::Breakpoint(self.cpu.pc())
     }
 
-    fn wait_for_interrupt(mut event_pump: sdl2::EventPump, stop_token: Arc<AtomicBool>) {
-        use sdl2::{event::Event, keyboard::Keycode};
+    fn sdl_loop(stop_token: Arc<AtomicBool>) {
+        use graphics::sdl2::SDL2Intrf;
+        use sdl2::{event::Event, keyboard::Keycode, keyboard::Mod};
+
+        let mut event_pump = SDL2Intrf::context().event_pump().unwrap();
 
         while !stop_token.load(std::sync::atomic::Ordering::Acquire) {
-            let event = event_pump.wait_event_timeout(100);
+            let timeout_ms = 200;
+            let event = event_pump.wait_event_timeout(timeout_ms);
             if event.is_none() {
                 continue;
             }
@@ -137,24 +144,62 @@ impl<'a> VNES<'a> {
                 | Event::KeyDown {
                     keycode: Some(Keycode::Escape),
                     ..
+                }
+                | Event::KeyDown {
+                    keycode: Some(Keycode::C),
+                    keymod: Mod::LCTRLMOD,
+                    ..
                 } => {
                     stop_token.store(true, std::sync::atomic::Ordering::Release);
                     return;
                 }
-                _ => {} // FIXME: Perhaps this should be recorded somewhere
+                ev => println!("Unhandled event {:?}", ev),
             }
         }
     }
 
-    pub fn play(&mut self) -> Result<(), String> {
-        use graphics::sdl2::SDL2Intrf;
-        use std::panic;
+    fn cpu_loop(&mut self, stop_token: Arc<AtomicBool>) -> Result<(), String> {
+        let mut inner_loop = || {
+            while !stop_token.load(std::sync::atomic::Ordering::Acquire) {
+                match self.run_once() {
+                    ExitStatus::Continue => {}
+                    ExitStatus::ExitError(e) => return Err(e),
 
+                    ExitStatus::StopRequested(code) => {
+                        if code == 0 {
+                            return Ok(());
+                        } else {
+                            println!("ERROR");
+                            return Err(format!("StopRequested: {}", code));
+                        }
+                    }
+
+                    // FIXME: Need to figure out the proper way to handle breakpoints
+                    ExitStatus::Breakpoint(_)
+                    | ExitStatus::ExitSuccess
+                    | ExitStatus::ExitInterrupt => {
+                        return Ok(());
+                    }
+                }
+            }
+
+            Ok(())
+        };
+
+        let ret = inner_loop();
+        stop_token.store(true, std::sync::atomic::Ordering::Release);
+        ret
+    }
+
+    pub fn play(&mut self) -> Result<(), String> {
         let stop_token_cpu = Arc::new(AtomicBool::new(false));
-        let event_pump = SDL2Intrf::context().event_pump().unwrap();
+        if self.headless {
+            return self.cpu_loop(stop_token_cpu);
+        }
 
         scope(|scope| {
-            let stop_token_main = stop_token_cpu.clone();
+            use std::panic;
+            let stop_token_sdl = stop_token_cpu.clone();
 
             // take_hook() returns the default hook in case when a custom one is not set
             let orig_hook = panic::take_hook();
@@ -167,39 +212,10 @@ impl<'a> VNES<'a> {
             let cpu_thread = scope
                 .builder()
                 .name("cpu-thread".to_owned())
-                .spawn(|_| {
-                    while !stop_token_cpu.load(std::sync::atomic::Ordering::Acquire) {
-                        match self.run_once() {
-                            ExitStatus::Continue => {}
-                            ExitStatus::ExitError(e) => return Err(e),
-
-                            ExitStatus::StopRequested(code) => {
-                                stop_token_cpu.store(true, std::sync::atomic::Ordering::Release);
-                                if code == 0 {
-                                    return Ok(());
-                                } else {
-                                    println!("ERROR");
-                                    return Err(format!("StopRequested: {}", code));
-                                }
-                            }
-
-                            // FIXME: Need to figure out the proper way to handle breakpoints
-                            ExitStatus::Breakpoint(_)
-                            | ExitStatus::ExitSuccess
-                            | ExitStatus::ExitInterrupt => {
-                                stop_token_cpu.store(true, std::sync::atomic::Ordering::Release);
-                                return Ok(());
-                            }
-                        }
-                    }
-
-                    Ok(())
-                })
+                .spawn(|_| self.cpu_loop(stop_token_cpu))
                 .unwrap();
 
-            // FIXME: This should be re-worked such that we don't launch an SDL thread for the
-            // headless variant
-            VNES::wait_for_interrupt(event_pump, stop_token_main);
+            VNES::sdl_loop(stop_token_sdl);
             cpu_thread.join().unwrap()
         })
         .unwrap()

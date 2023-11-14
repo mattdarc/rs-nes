@@ -38,7 +38,7 @@ fn main() -> Result<(), String> {
 
     // FIXME: Make this a runtime-decision with an argument parser
     let mut vnes =
-        VNES::new("/Users/matt/rs-nes/nes-test-roms/nes_instr_test/rom_singles/02-immediate.nes")
+        VNES::new("/Users/matt/rs-nes/nes-test-roms/nes_instr_test/rom_singles/01-implied.nes")
             .unwrap();
     vnes.reset();
     let res = vnes.play();
