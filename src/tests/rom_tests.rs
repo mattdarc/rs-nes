@@ -145,11 +145,14 @@ fn run_test_rom(s: &str) {
     let mut nes = VNES::new_headless(s).expect("Could not load nestest ROM");
     nes.reset();
 
+    let mut test_started = false;
     nes.add_post_execute_task(Box::new(move |cpu: &mut dyn CpuInterface| {
         const TEST_DONE_RESULT_ADDR: u16 = 0x6000;
         const TEST_RUNNING: u8 = 0x80;
         let val = cpu.read_address(TEST_DONE_RESULT_ADDR);
-        if val != 0x00 {
+        if val == 0x80 {
+            test_started = true;
+        } else if test_started && val != 0x80 {
             let pass = val == 0xff;
             cpu.request_stop(if pass { 0 } else { 1 });
         }

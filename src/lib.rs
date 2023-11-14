@@ -178,6 +178,7 @@ impl<'a> VNES<'a> {
                                 if code == 0 {
                                     return Ok(());
                                 } else {
+                                    println!("ERROR");
                                     return Err(format!("StopRequested: {}", code));
                                 }
                             }

@@ -139,8 +139,8 @@ impl<BusType: Bus> CpuInterface for CPU<BusType> {
         self.bus.read(addr)
     }
 
-    fn request_stop(&mut self, code: i32) {
-        self.exit_status = ExitStatus::StopRequested(code);
+    fn request_stop(&mut self, retcode: i32) {
+        self.exit_status = ExitStatus::StopRequested(retcode);
     }
 }
 
