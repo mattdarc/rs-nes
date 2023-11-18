@@ -614,7 +614,8 @@ impl PPU {
             (0..240, 1..256) => {
                 // FIXME: Similar to do_tile_fetches, if we update that to use a tile-array then
                 // this becomes simpler since we can write one scanline at a time at the end of the
-                // frame. We could also dispatch another thread potentially for the rendering, resulting in a
+                // frame. We could also dispatch another thread potentially for the rendering,
+                // resulting in a
                 //  -- Event thread for listening to user interactions
                 //  -- A NES thread for CPU, PPU, etc work
                 //  -- A rendering thread where we send only rendering data

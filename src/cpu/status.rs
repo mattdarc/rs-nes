@@ -33,4 +33,9 @@ mod test {
     fn empty() {
         assert_eq!(Status::empty().bits(), 0);
     }
+
+    #[test]
+    fn bits() {
+        assert_eq!(Status::NEGATIVE.bits(), 0x80);
+    }
 }

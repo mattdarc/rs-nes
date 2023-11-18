@@ -2,7 +2,7 @@ use tracing::Level;
 use tracing_subscriber::{fmt, prelude::*, Layer};
 use venus::VNES;
 
-const DEBUG_COMPONENTS: &'static [&str] = &["cpu", "cartridge::mapper", "bus"];
+const DEBUG_COMPONENTS: &'static [&str] = &["cpu"];
 
 fn init_tracing() {
     let mut layers = Vec::new();
@@ -37,9 +37,10 @@ fn main() -> Result<(), String> {
     init_tracing();
 
     // FIXME: Make this a runtime-decision with an argument parser
-    let mut vnes =
-        VNES::new("/Users/matt/rs-nes/nes-test-roms/nes_instr_test/rom_singles/01-implied.nes")
-            .unwrap();
+    let mut vnes = VNES::new_headless(
+        "/Users/matt/rs-nes/nes-test-roms/nes_instr_test/rom_singles/06-abs_xy.nes",
+    )
+    .unwrap();
     vnes.reset();
     let res = vnes.play();
 

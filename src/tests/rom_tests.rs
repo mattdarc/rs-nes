@@ -1,6 +1,7 @@
 use lazy_static::lazy_static;
 use regex::Regex;
 use tracing::{event, Level};
+use tracing_subscriber::{fmt, prelude::*, Layer};
 use venus::VNES;
 use venus::{
     cpu::{instructions::Instruction, CpuInterface, CpuState, CpuStateBuilder},
@@ -142,6 +143,30 @@ fn nestest() {
 }
 
 fn run_test_rom(s: &str) {
+    use std::sync::Once;
+    static INIT: Once = Once::new();
+    INIT.call_once(|| {
+        let mut layers = Vec::new();
+
+        // Configure a custom event formatter
+        layers.push(
+            fmt::layer()
+                .with_ansi(false) // No colors
+                .with_level(false) // include levels in formatted output
+                .with_target(false) // don't include targets
+                .with_thread_ids(false) // include the thread ID of the current thread
+                .with_thread_names(false) // include the name of the current thread
+                .without_time()
+                .with_file(false) // No file name in output
+                .compact()
+                .with_filter(tracing_subscriber::filter::filter_fn(|metadata| {
+                    metadata.target() == "venus::cpu" && metadata.level() <= &Level::INFO
+                }))
+                .boxed(),
+        ); // use the `Compact` formatting style.
+        tracing_subscriber::registry().with(layers).init();
+    });
+
     let mut nes = VNES::new_headless(s).expect("Could not load nestest ROM");
     nes.reset();
 
@@ -150,15 +175,15 @@ fn run_test_rom(s: &str) {
         const TEST_DONE_RESULT_ADDR: u16 = 0x6000;
         const TEST_RUNNING: u8 = 0x80;
         let val = cpu.read_address(TEST_DONE_RESULT_ADDR);
-        if val == 0x80 {
+        if val == TEST_RUNNING {
             test_started = true;
         } else if test_started && val != 0x80 {
-            let pass = val == 0xff;
-            cpu.request_stop(if pass { 0 } else { 1 });
+            cpu.request_stop(val.into());
         }
     }));
 
-    assert!(nes.play().is_ok());
+    let result = nes.play();
+    assert!(result.is_ok(), "{:?}", result);
 }
 
 macro_rules! rom_tests {
@@ -174,6 +199,14 @@ macro_rules! rom_tests {
 
 rom_tests! {
     nes_instr_test_implied: "nes-test-roms/nes_instr_test/rom_singles/01-implied.nes",
-    // FIXME: This should fail
     nes_instr_test_immediate: "nes-test-roms/nes_instr_test/rom_singles/02-immediate.nes",
+    nes_instr_test_zero_page: "nes-test-roms/nes_instr_test/rom_singles/03-zero_page.nes",
+    nes_instr_test_zp_xy: "nes-test-roms/nes_instr_test/rom_singles/04-zp_xy.nes",
+    nes_instr_test_absolute: "nes-test-roms/nes_instr_test/rom_singles/05-absolute.nes",
+    nes_instr_test_abs_xy: "nes-test-roms/nes_instr_test/rom_singles/06-abs_xy.nes",
+    nes_instr_test_ind_x: "nes-test-roms/nes_instr_test/rom_singles/07-ind_x.nes",
+    nes_instr_test_ind_y: "nes-test-roms/nes_instr_test/rom_singles/08-ind_y.nes",
+    nes_instr_test_branches: "nes-test-roms/nes_instr_test/rom_singles/09-branches.nes",
+    nes_instr_test_stack: "nes-test-roms/nes_instr_test/rom_singles/10-stack.nes",
+    nes_instr_test_special: "nes-test-roms/nes_instr_test/rom_singles/11-special.nes",
 }

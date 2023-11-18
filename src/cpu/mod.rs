@@ -16,6 +16,11 @@ fn is_negative(v: u8) -> bool {
 }
 
 #[inline]
+fn xor(a: bool, b: bool) -> bool {
+    return (a || b) && (!a || !b);
+}
+
+#[inline]
 fn is_bit_set(v: u8, bit: u8) -> bool {
     (v & (1 << bit)) != 0
 }
@@ -246,7 +251,7 @@ impl<BusType: Bus> CPU<BusType> {
     fn trace_instruction(&self) {
         let (scanline, ppu_cycle) = self.bus.ppu_state();
 
-        const BUFSZ: usize = 16;
+        const BUFSZ: usize = 10;
         let mut operands_str: [u8; BUFSZ] = [' ' as u8; BUFSZ];
 
         if tracing::enabled!(Level::DEBUG) {
@@ -254,19 +259,19 @@ impl<BusType: Bus> CPU<BusType> {
             // waiting on malloc for most of the time
             for (i, op) in self.operands.iter().enumerate() {
                 operands_str[3 * i] = as_hex_digit(op >> 4);
-                operands_str[3 * i + 1] = as_hex_digit(op >> 4);
+                operands_str[3 * i + 1] = as_hex_digit(op & 0xf);
             }
             operands_str[BUFSZ - 1] = '\0' as u8;
         }
 
         event!(
             Level::DEBUG,
-            "[{:>10}]  {:<04X}  {:<2X} {:<8} {:<4}  {:>10}  A:{:02X}  X:{:02X}  Y:{:02X}  P:{:02X}  SP:{:02X}  CYC:{:>3}  SL:{:>3}",
+            "[{:>10}]  {:<04X}  {:<2X} {:<8} {:>5}  {:>12}  A:{:02X}  X:{:02X}  Y:{:02X}  P:{:02X}  SP:{:02X}  CYC:{:>3}  SL:{:>3}",
             self.instructions_executed,
             self.old_pc,
             self.instruction.opcode(),
-            {std::str::from_utf8(&operands_str).unwrap()},
-            self.instruction.name(),
+            std::str::from_utf8(&operands_str).unwrap(),
+            format!("{:>5}", self.instruction.name()),
             format!("{:?}", self.instruction.mode()),
             self.acc,
             self.x,
@@ -456,7 +461,9 @@ impl<BusType: Bus> CPU<BusType> {
     fn push8(&mut self, v: u8) {
         self.poke(v);
         self.sp = self.sp.wrapping_sub(1);
-        assert!(self.sp != 0xFF, "Stack overflow!");
+        if self.sp == 0xFF {
+            event!(Level::DEBUG, "WARNING: Stack overflow!");
+        }
     }
 
     fn pop16(&mut self) -> u16 {
@@ -465,7 +472,10 @@ impl<BusType: Bus> CPU<BusType> {
     }
 
     fn pop8(&mut self) -> u8 {
-        assert!(self.sp != 0xFF, "Tried to pop empty stack!");
+        if self.sp == 0xFF {
+            event!(Level::DEBUG, "WARNING: Tried to pop empty stack!");
+        }
+
         self.sp = self.sp.wrapping_add(1);
         self.peek()
     }
@@ -652,10 +662,10 @@ impl<BusType: Bus> CPU<BusType> {
     }
 
     fn brk(&mut self) {
-        self.push16(self.pc.wrapping_add(2));
-        self.php();
+        self.push16(self.old_pc.wrapping_add(2));
+        self.push8(self.status.bits() | Status::BRK.bits() | Status::PUSH_IRQ.bits());
         self.status.set(Status::INT_DISABLE, true);
-        self.pc = self.bus.read16(NMI_VECTOR_START);
+        self.pc = self.bus.read16(IRQ_VECTOR_START);
     }
 
     fn clc(&mut self) {
@@ -745,7 +755,7 @@ impl<BusType: Bus> CPU<BusType> {
     }
 
     fn jsr(&mut self) {
-        let pc = self.pc - 1;
+        let pc = self.old_pc.wrapping_add(2);
         self.push16(pc);
         self.pc = ((self.operands[1] as u16) << 8) | (self.operands[0] as u16);
     }
@@ -843,7 +853,9 @@ impl<BusType: Bus> CPU<BusType> {
     }
 
     fn rti(&mut self) {
-        self.plp();
+        self.status = Status::from_bits(self.pop8() & !Status::BRK.bits())
+            .expect("All bits are covered in Status");
+        self.status.set(Status::PUSH_IRQ, true);
         self.pc = self.pop16();
     }
 
@@ -911,44 +923,40 @@ impl<BusType: Bus> CPU<BusType> {
 
     // Illegal instructions
     fn alr(&mut self) {
-        let addr = self.calc_addr();
-        let operand = self.bus.read(addr);
-
-        self.status.set(Status::CARRY, operand & 0x01 != 0);
-        let shift = operand >> 1;
+        let operand = self.get_operand();
 
         self.acc &= operand;
-        self.bus.write(addr, shift);
-        self.update_nz(shift);
+        self.status.set(Status::CARRY, (self.acc & 0x01) != 0);
+        self.acc >>= 1;
+        self.update_nz(self.acc);
     }
 
-    // TODO this doesn't seem right
     fn anc(&mut self) {
-        let addr = self.calc_addr();
-        let operand = self.bus.read(addr);
-
-        self.status.set(Status::CARRY, operand & 0x80 != 0);
-        let shift = operand << 1;
+        let operand = self.get_operand();
 
         self.acc &= operand;
-        self.bus.write(addr, shift);
+        self.status.set(Status::CARRY, (self.acc & 0x80) != 0);
         self.update_nz(self.acc);
     }
 
     fn ane(&mut self) {
-        panic!("unstable ANE");
+        let operand = self.get_operand();
+
+        self.acc &= self.x & operand;
+        self.update_nz(self.acc);
     }
 
     fn arr(&mut self) {
-        let addr = self.calc_addr();
-        let operand = self.bus.read(addr);
-
+        let operand = self.get_operand();
         let carry = self.status.contains(Status::CARRY);
-        self.status.set(Status::CARRY, (operand & 0x01) != 0);
-        let result = (operand >> 1) | ((carry as u8) << 7);
 
         self.acc &= operand;
-        self.bus.write(addr, result);
+        self.acc = (self.acc >> 1) | ((carry as u8) << 7);
+
+        let ovfl = xor((self.acc & 0x40) != 0, (self.acc & 0x20) != 0);
+        self.status.set(Status::OVERFLOW, ovfl);
+        self.status.set(Status::CARRY, (self.acc & 0x40) != 0);
+
         self.update_nz(self.acc);
     }
 
@@ -988,7 +996,12 @@ impl<BusType: Bus> CPU<BusType> {
     }
 
     fn lxa(&mut self) {
-        panic!("unstable LXA");
+        let operand = self.get_operand();
+
+        self.acc = operand;
+        self.x = self.acc;
+
+        self.update_nz(self.acc);
     }
 
     fn rla(&mut self) {
@@ -1027,8 +1040,9 @@ impl<BusType: Bus> CPU<BusType> {
     fn sbx(&mut self) {
         let operand = self.get_operand();
         let ax = self.acc & self.x;
+        self.x = ax.wrapping_sub(operand);
 
-        self.x = ax - operand;
+        self.status.set(Status::CARRY, ax >= operand);
         self.update_nz(self.x);
     }
 
@@ -1039,16 +1053,31 @@ impl<BusType: Bus> CPU<BusType> {
         self.bus.write(addr, ax & high);
     }
 
+    // Re: SHX/SHY
+    //
+    // If we cross over into a new page, then the calculated addr_high + 1 gets used, but for these
+    // opcodes addr_high + 1 is corrupted (prolly due to the result being put on the same bus as
+    // x/y), and the target address for e.g. SYA becomes ((y & (addr_high + 1)) << 8) | addr_low
+    // instead of the normal ((addr_high + 1) << 8) | addr_low. If we don't wrap to a new page,
+    // then the corrupted value doesn't get used for the address, so nothing special happens.
     fn shx(&mut self) {
-        let addr = self.calc_addr();
-        let high_x = self.x & ((addr >> 8) + 1) as u8;
-        self.bus.write(addr, high_x);
+        let mut addr = self.calc_addr();
+        let hi = ((addr >> 8) as u8).wrapping_add(1);
+        if crosses_page(addr, addr.wrapping_sub(self.x.into())) {
+            addr = (hi as u16) << 8 | (addr & 0xff);
+        }
+
+        self.bus.write(addr, self.x & hi);
     }
 
     fn shy(&mut self) {
-        let addr = self.calc_addr();
-        let high_y = self.y & ((addr >> 8) + 1) as u8;
-        self.bus.write(addr, high_y);
+        let mut addr = self.calc_addr();
+        let hi = ((addr >> 8) as u8).wrapping_add(1);
+        if crosses_page(addr, addr.wrapping_sub(self.y.into())) {
+            addr = (hi as u16) << 8 | (addr & 0xff);
+        }
+
+        self.bus.write(addr, self.y & hi);
     }
 
     fn slo(&mut self) {

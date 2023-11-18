@@ -168,10 +168,9 @@ impl<'a> VNES<'a> {
                     ExitStatus::StopRequested(code) => {
                         if code == 0 {
                             return Ok(());
-                        } else {
-                            println!("ERROR");
-                            return Err(format!("StopRequested: {}", code));
                         }
+
+                        return Err(format!("StopRequested: {}", code));
                     }
 
                     // FIXME: Need to figure out the proper way to handle breakpoints
