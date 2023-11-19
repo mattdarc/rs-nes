@@ -4,7 +4,11 @@ use crate::controller::*;
 use crate::graphics::Renderer;
 use crate::memory::*;
 use crate::ppu::*;
+use crate::timer;
 use tracing::{event, Level};
+
+pub const NTSC_CLOCK_MHZ: usize = 1_789_773;
+pub const PAL_CLOCK_MHZ: usize = 1_662_607;
 
 pub trait Bus {
     fn read(&mut self, addr: u16) -> u8;
@@ -32,10 +36,11 @@ pub struct NesBus {
     ppu: PPU,
     apu: APU,
     cpu_ram: RAM,
-    cycles: usize,
     nmi: Option<u8>,
 
-    cpu_test_enabled: bool,
+    total_cycles: usize,
+    sync_cycles: usize,
+    last_sync: timer::FastInstant,
 }
 
 impl NesBus {
@@ -49,12 +54,13 @@ impl NesBus {
             cpu_ram: RAM::with_size(0x800),
             nmi: None,
 
-            cycles: 0,
-            cpu_test_enabled: false,
+            total_cycles: 0,
+            sync_cycles: 0,
+            last_sync: timer::FastInstant::now(),
         }
     }
 
-    fn dump_instr(&self, ty: &str, addr: u16, value: u8) {
+    fn dump_access(&self, ty: &str, addr: u16, value: u8) {
         event!(
             Level::DEBUG,
             "CYC:{} {} value 0x{:X} @ addr 0x{:X}",
@@ -63,6 +69,26 @@ impl NesBus {
             value,
             addr
         );
+    }
+
+    fn throttle_to_ntsc(&mut self) {
+        const SYNC_CYCLES: usize = 20_000;
+        if self.sync_cycles < SYNC_CYCLES {
+            return;
+        }
+
+        const SLEEP_OVERHEAD_US: u64 = 400;
+        const SYNC_RESOLUTION_US: u64 = (1_000_000 * SYNC_CYCLES / NTSC_CLOCK_MHZ) as u64;
+        const SIMULATED_DURATION: timer::Duration =
+            timer::Duration::from_micros(SYNC_RESOLUTION_US - SLEEP_OVERHEAD_US);
+
+        let real_duration = self.last_sync.elapsed();
+        if let Some(delta) = SIMULATED_DURATION.checked_sub(real_duration) {
+            timer::timed!("sync", { std::thread::sleep(delta) });
+        }
+
+        self.last_sync = timer::FastInstant::now();
+        self.sync_cycles = 0;
     }
 }
 
@@ -88,14 +114,14 @@ impl Bus for NesBus {
             // NOTE: Cartridges use absolute addresses
             0x4020..=0xFFFF => self.game.prg_read(addr),
         };
-        self.dump_instr("read", addr, value);
+        self.dump_access("read", addr, value);
 
         value
     }
 
     #[tracing::instrument(target = "bus", level = Level::DEBUG, skip(self))]
     fn write(&mut self, addr: u16, val: u8) {
-        self.dump_instr("write", addr, val);
+        self.dump_access("write", addr, val);
 
         match addr {
             0x0..=0x1FFF => self.cpu_ram[addr as usize & 0x7FF] = val,
@@ -136,15 +162,19 @@ impl Bus for NesBus {
     }
 
     fn cycles(&self) -> usize {
-        self.cycles
+        self.total_cycles
     }
 
     fn clock(&mut self, cycles: u8) {
-        self.cycles += cycles as usize;
+        self.total_cycles += cycles as usize;
+        self.sync_cycles += cycles as usize;
+
         self.ppu.clock(3 * cycles as i16);
         if self.ppu.generate_nmi() {
             self.nmi = Some(1);
         }
+
+        self.throttle_to_ntsc();
     }
 
     fn ppu_state(&self) -> (i16, i16) {

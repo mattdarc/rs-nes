@@ -6,11 +6,11 @@ use crate::cartridge::header::{Header, Mirroring};
 use crate::cartridge::{Cartridge, CartridgeInterface};
 use crate::graphics::Renderer;
 use crate::memory::{RAM, ROM};
+use crate::timer;
 use flags::*;
 use registers::*;
 use sprite::Sprite;
 use std::collections::VecDeque;
-use std::time;
 use tracing::{event, Level};
 
 // FIXME: Need to fix up these types a bit
@@ -95,8 +95,6 @@ pub struct PPU {
     ppudata_buffer: u8,
 
     palette_table: [u8; 32],
-
-    timestamp: time::Instant,
 }
 
 const WHITE: [u8; 4] = [0xff; 4];
@@ -125,7 +123,7 @@ fn mirror(mirror: &Mirroring, addr: u16) -> usize {
     (addr & !0xFFF)
         | match mirror {
             // AaBb
-            Mirroring::Horizontal => (addr & 0xBFF),
+            Mirroring::Horizontal => addr & 0xBFF,
 
             // ABab
             Mirroring::Vertical => addr & 0x7FF,
@@ -171,7 +169,6 @@ impl PPU {
             ppudata_buffer: 0,
 
             vram: RAM::with_size(PPU_VRAM_SIZE),
-            timestamp: time::Instant::now(),
         }
     }
 
@@ -396,18 +393,6 @@ impl PPU {
     }
 
     fn do_end_frame(&mut self) {
-        if self.frame % 30 == 0 {
-            let duration_ms = (time::Instant::now() - self.timestamp).as_millis();
-            event!(
-                Level::INFO,
-                "END FRAME {}> {}ms ({} fps)",
-                self.frame,
-                duration_ms,
-                30_000 / duration_ms
-            );
-            self.timestamp = time::Instant::now()
-        }
-
         self.frame += 1;
         self.flags.has_nmi = false;
         self.flags.odd = !self.flags.odd;
@@ -417,14 +402,12 @@ impl PPU {
         // self.show_nametable();
         // self.show_pattern_table();
         if self.rendering_enabled() {
-            // FIXME: This should be done on a line basis
+            // FIXME: Maybe this should be done on a line basis
             self.render_frame();
         }
 
         // FIXME: add extra checks mode
         // self.clear_render_buffer();
-
-        std::thread::sleep(std::time::Duration::from_millis(10));
     }
 
     fn is_blanking(&self) -> bool {
@@ -601,12 +584,12 @@ impl PPU {
 
     fn tick_once(&mut self) {
         if !self.is_blanking() {
-            self.do_tile_fetches();
+            timer::timed!("ppu::tile fetch", { self.do_tile_fetches() });
         }
 
         // https://www.nesdev.org/wiki/PPU_rendering
         match (self.scanline, self.cycle) {
-            (-1, 1) => self.do_clear_frame_flags(),
+            (-1, 1) => timer::timed!("ppu::clear flags", { self.do_clear_frame_flags() }),
             (-1, _) => { /* dummy scanline */ }
 
             // Visible scanlines (0-239)
@@ -621,22 +604,30 @@ impl PPU {
                 //  -- A rendering thread where we send only rendering data
                 let tile_x = (self.cycle - 1) / TILE_WIDTH_PX as i16;
                 if tile_x != self.last_tile {
-                    // Render one tile at a time. This is how frequently the real hardware is
-                    // updated. A possible cycle-accurate improvememt would be to do this fetch
-                    // every 8 cycles but write the pixels every cycle. Not sure if we actually
-                    // need to do this to get a workable game.
-                    self.draw_background();
-                    self.last_tile = tile_x;
+                    timer::timed!("ppu::draw background", {
+                        // Render one tile at a time. This is how frequently the real hardware is
+                        // updated. A possible cycle-accurate improvememt would be to do this fetch
+                        // every 8 cycles but write the pixels every cycle. Not sure if we actually
+                        // need to do this to get a workable game.
+                        self.draw_background();
+                        self.last_tile = tile_x;
+                    });
                 }
             }
             // Draw sprites once on the last visible cycle so they're over the background
-            (0..240, 256) => self.draw_sprites(),
-            (0..240, 257..321) => self.evaluate_sprites_next_scanline(),
+            (0..240, 256) => timer::timed!("ppu::draw sprites", { self.draw_sprites() }),
+            (0..240, 257..321) => {
+                timer::timed!("ppu::evaluate sprites", {
+                    self.evaluate_sprites_next_scanline()
+                })
+            }
             (0..240, 321..342) => { /* garbage nametable fetches */ }
 
             (240, _) => { /* idle scanline */ }
 
-            (241, 1) => self.do_start_vblank(),
+            (241, 1) => timer::timed!("ppu::vblank", {
+                self.do_start_vblank();
+            }),
             (241..261, _) => { /* PPU should make no memory accesses */ }
 
             (scanline, cycle) => unreachable!("scanline={}, cycle={}", scanline, cycle),
@@ -653,17 +644,21 @@ impl PPU {
             self.cycle -= CYCLES_PER_SCANLINE as i16;
             self.scanline += 1;
             if self.scanline > SCANLINES_PER_FRAME as i16 {
-                self.scanline = -1;
-                self.do_end_frame();
+                timer::timed!("ppu::EOF", {
+                    self.scanline = -1;
+                    self.do_end_frame();
+                });
             }
         }
     }
 
     #[tracing::instrument(target = "ppu", skip(self))]
     pub fn clock(&mut self, ticks: i16) {
-        for _ in 0..ticks {
-            self.tick_once();
-        }
+        timer::timed!("ppu", {
+            for _ in 0..ticks {
+                self.tick_once();
+            }
+        });
     }
 
     fn bg_table_base(&self) -> u16 {

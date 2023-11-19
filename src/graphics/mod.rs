@@ -12,7 +12,7 @@ pub mod constants {
     pub const WINDOW_HEIGHT_MUL: u32 = 3;
     pub const WINDOW_WIDTH: u32 = NES_SCREEN_WIDTH * WINDOW_WIDTH_MUL;
     pub const WINDOW_HEIGHT: u32 = NES_SCREEN_HEIGHT * WINDOW_HEIGHT_MUL;
-    pub const FRAME_RATE_NS: u32 = 1_000_000_000 / 60 / NES_SCREEN_HEIGHT;
+    pub const FRAME_RATE_MS: u32 = 1_000 / 60;
     pub const NES_SCREEN_WIDTH: u32 = 256;
     pub const NES_SCREEN_HEIGHT: u32 = 240;
 }

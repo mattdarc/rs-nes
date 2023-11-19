@@ -3,6 +3,7 @@ mod status;
 
 use {
     crate::bus::Bus,
+    crate::timer,
     crate::ExitStatus,
     instructions::Instruction,
     status::Status,
@@ -47,9 +48,6 @@ const STACK_BEGIN: u16 = 0x0100;
 const NMI_VECTOR_START: u16 = 0xFFFA;
 const RESET_VECTOR_START: u16 = 0xFFFC;
 const IRQ_VECTOR_START: u16 = 0xFFFE;
-
-pub const NTSC_CLOCK: u32 = 1_789_773;
-pub const PAL_CLOCK: u32 = 1_662_607;
 
 // Exported for use in tests
 
@@ -224,11 +222,8 @@ impl<BusType: Bus> CPU<BusType> {
             if let Some(status) = self.bus.pop_nmi() {
                 self.handle_nmi(status);
             } else {
-                self.fetch_instruction();
-
-                self.execute_instruction();
-
-                self.instructions_executed += 1;
+                timer::timed!("cpu::fetch", { self.fetch_instruction() });
+                timer::timed!("cpu::execute", { self.execute_instruction() });
             }
         }
 
@@ -390,6 +385,8 @@ impl<BusType: Bus> CPU<BusType> {
 
             ILLEGAL_NOP | NOP => self.nop(),
         }
+
+        self.instructions_executed += 1;
     }
 
     fn hlt(&self) -> ! {

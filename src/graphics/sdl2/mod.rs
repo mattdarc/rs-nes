@@ -3,6 +3,7 @@
 ///
 use super::constants::*;
 use super::Renderer;
+use crate::timer;
 use sdl2::pixels::PixelFormatEnum;
 use sdl2::rect::Rect;
 use sdl2::render::{TextureAccess, TextureCreator, WindowCanvas};
@@ -95,6 +96,7 @@ impl Renderer for SDLRenderer {
             WINDOW_WIDTH,
             WINDOW_HEIGHT_MUL,
         );
+
         self.canvas.copy(&texture, None, Some(dst_rect)).unwrap();
         self.canvas.present();
     }
@@ -102,19 +104,21 @@ impl Renderer for SDLRenderer {
     /// Display a buffer buf on the screen. The format of the buffer is assumed to be in the RGB888
     /// format
     fn render_frame(&mut self, buf: &[u8], width: u32, height: u32) {
-        self.canvas
-            .set_draw_color(sdl2::pixels::Color::RGB(0, 0, 0));
-        self.canvas.fill_rect(None).unwrap();
+        timer::timed!("render", {
+            self.canvas
+                .set_draw_color(sdl2::pixels::Color::RGB(0, 0, 0));
+            self.canvas.fill_rect(None).unwrap();
 
-        let mut texture = self
-            .tex_creator
-            .create_texture_target(None, width, height)
-            .unwrap();
+            let mut texture = self
+                .tex_creator
+                .create_texture_target(None, width, height)
+                .unwrap();
 
-        let pitch_bytes: usize = PX_SIZE_BYTES as usize * width as usize;
-        texture.update(None, &buf, pitch_bytes).unwrap();
-        self.canvas.copy(&texture, None, None).unwrap();
-        self.canvas.present();
+            let pitch_bytes: usize = PX_SIZE_BYTES as usize * width as usize;
+            texture.update(None, &buf, pitch_bytes).unwrap();
+            self.canvas.copy(&texture, None, None).unwrap();
+            self.canvas.present();
+        });
     }
 }
 

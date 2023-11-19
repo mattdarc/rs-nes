@@ -1,5 +1,6 @@
 #![allow(dead_code)]
 #![feature(exclusive_range_pattern)]
+#![feature(hash_raw_entry)]
 
 extern crate sdl2;
 
@@ -16,12 +17,14 @@ pub mod ppu;
 mod bus;
 mod controller;
 mod memory;
+mod timer;
 
 use cartridge::*;
 use cpu::*;
 use crossbeam::thread::scope;
 use std::cell::RefCell;
 use std::sync::{atomic::AtomicBool, Arc};
+use tracing::{event, Level};
 
 pub type NesBus = bus::NesBus;
 pub type NesCPU = CPU<NesBus>;
@@ -87,15 +90,29 @@ impl<'a> VNES<'a> {
     }
 
     fn run_pre_execute_tasks(&mut self) {
-        for task in self.post_execute_tasks.borrow_mut().iter_mut() {
-            task(&mut self.cpu);
+        let mut tasks = self.pre_execute_tasks.borrow_mut();
+        if tasks.is_empty() {
+            return;
         }
+
+        timer::timed!("pre-execute tasks", {
+            for task in tasks.iter_mut() {
+                task(&mut self.cpu);
+            }
+        });
     }
 
     fn run_post_execute_tasks(&mut self) {
-        for task in self.post_execute_tasks.borrow_mut().iter_mut() {
-            task(&mut self.cpu);
+        let mut tasks = self.post_execute_tasks.borrow_mut();
+        if tasks.is_empty() {
+            return;
         }
+
+        timer::timed!("post-execute tasks", {
+            for task in tasks.iter_mut() {
+                task(&mut self.cpu);
+            }
+        });
     }
 
     pub fn nestest_reset_override(&mut self, pc: u16) {
@@ -133,8 +150,8 @@ impl<'a> VNES<'a> {
         let mut event_pump = SDL2Intrf::context().event_pump().unwrap();
 
         while !stop_token.load(std::sync::atomic::Ordering::Acquire) {
-            let timeout_ms = 200;
-            let event = event_pump.wait_event_timeout(timeout_ms);
+            const TIMEOUT_MS: u32 = 200;
+            let event = event_pump.wait_event_timeout(TIMEOUT_MS);
             if event.is_none() {
                 continue;
             }
@@ -153,7 +170,7 @@ impl<'a> VNES<'a> {
                     stop_token.store(true, std::sync::atomic::Ordering::Release);
                     return;
                 }
-                ev => println!("Unhandled event {:?}", ev),
+                ev => event!(Level::DEBUG, "Unhandled event {:?}", ev),
             }
         }
     }

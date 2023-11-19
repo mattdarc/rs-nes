@@ -37,10 +37,7 @@ fn main() -> Result<(), String> {
     init_tracing();
 
     // FIXME: Make this a runtime-decision with an argument parser
-    let mut vnes = VNES::new_headless(
-        "/Users/matt/rs-nes/nes-test-roms/nes_instr_test/rom_singles/06-abs_xy.nes",
-    )
-    .unwrap();
+    let mut vnes = VNES::new("roms/mario-bros.nes").unwrap();
     vnes.reset();
     let res = vnes.play();
 

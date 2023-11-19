@@ -26,7 +26,9 @@ fn main() {
                 _ => {}
             }
         }
-        ::std::thread::sleep(Duration::new(0, venus::graphics::constants::FRAME_RATE_NS));
+        ::std::thread::sleep(Duration::from_millis(
+            venus::graphics::constants::FRAME_RATE_MS as u64,
+        ));
 
         y = (y + 1) % 240;
         assert!(scanline.iter().all(|x| x == &scanline[0]));
