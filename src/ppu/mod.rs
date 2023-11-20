@@ -435,9 +435,6 @@ impl PPU {
             // FIXME: Maybe this should be done on a line basis
             self.render_frame();
         }
-
-        // FIXME: add extra checks mode
-        // self.clear_render_buffer();
     }
 
     fn is_blanking(&self) -> bool {
@@ -624,11 +621,12 @@ impl PPU {
             }
             // Draw sprites once on the last visible cycle so they're over the background
             (0..240, 256) => timer::timed!("ppu::draw sprites", { self.draw_sprites() }),
-            (0..240, 257..321) => {
+            (0..240, 257) => {
                 timer::timed!("ppu::evaluate sprites", {
                     self.evaluate_sprites_next_scanline()
                 })
             }
+            (0..240, 258..321) => { /* HW evaluating sprites */ }
             (0..240, 321..342) => { /* garbage nametable fetches */ }
 
             (240, _) => { /* idle scanline */ }
@@ -941,32 +939,31 @@ impl PPU {
             return;
         }
 
-        const FIRST_CYCLE: i16 = 257;
-        let n = (self.ppu_cycle - FIRST_CYCLE) as usize;
-        assert!(n < 64);
+        const NUM_SPRITES: usize = 64;
+        for n in 0..NUM_SPRITES {
+            // Process the sprite in the primary OAM at this location. If it is in the range of the
+            // next scanline being rendered, copy it to the second OAM to be rendered
+            let sprite_range = (4 * n)..((4 * n) + 4);
+            let sprite = Sprite::from(&self.oam_primary[sprite_range]);
+            if !self.sprite_hit_next_scanline(&sprite) {
+                continue;
+            }
 
-        // Process the sprite in the primary OAM at this location. If it is in the range of the
-        // next scanline being rendered, copy it to the second OAM to be rendered
-        let sprite_range = (4 * n)..((4 * n) + 4);
-        let sprite = Sprite::from(&self.oam_primary[sprite_range]);
-        if !self.sprite_hit_next_scanline(&sprite) {
-            return;
+            if self.oam_secondary.sprites.len() >= 8 {
+                // Sprite found but all of them are already set. Set the overflow flag without
+                // adding the sprite to be rendered
+                self.registers.status |= PpuStatus::SPRITE_OVERFLOW;
+                return;
+            }
+
+            // This is sprite 0 in the OAM
+            if n == 0 {
+                self.oam_secondary.has_sprite_0 = true;
+            }
+
+            // Success: fouund a sprite we can actually push
+            self.oam_secondary.sprites.push(sprite);
         }
-
-        if self.oam_secondary.sprites.len() >= 8 {
-            // Sprite found but all of them are already set. Set the overflow flag without adding
-            // the sprite to be rendered
-            self.registers.ctrl |= PpuStatus::SPRITE_OVERFLOW;
-            return;
-        }
-
-        // This is sprite 0 in the OAM
-        if n == 0 {
-            self.oam_secondary.has_sprite_0 = true;
-        }
-
-        // Success: fouund a sprite we can actually push
-        self.oam_secondary.sprites.push(sprite);
     }
 
     fn create_range(rev: bool, n: usize) -> impl Iterator<Item = usize> {
@@ -1050,9 +1047,7 @@ impl PPU {
         let render_slice = &mut self.frame_buf[buf_addr..(buf_addr + PX_SIZE_BYTES)];
 
         let color_slice = &to_u8_slice(color);
-        if !self.needs_render {
-            self.needs_render = color_slice != render_slice;
-        }
+        self.needs_render = self.needs_render || color_slice != render_slice;
         render_slice.copy_from_slice(color_slice);
     }
 
