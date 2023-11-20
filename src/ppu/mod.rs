@@ -98,6 +98,8 @@ pub struct PPU {
     tile_q: VecDeque<Tile>,
 
     palette_table: [u8; 32],
+
+    needs_render: bool,
 }
 
 const WHITE: [u8; 4] = [0xff; 4];
@@ -172,6 +174,8 @@ impl PPU {
             tile_q,
             ppudata_buffer: 0,
             vram: RAM::with_size(PPU_VRAM_SIZE),
+
+            needs_render: true,
         }
     }
 
@@ -567,34 +571,34 @@ impl PPU {
     }
 
     fn do_tile_fetches(&mut self) {
-        if self.ppu_cycle == 0 {
-            return;
-        }
-
-        if 257 <= self.ppu_cycle && self.ppu_cycle < 320 {
-            // No fetches happen here, this is where sprites are fetched (we don't yet though)
+        if self.ppu_cycle == 0 || (257 <= self.ppu_cycle && self.ppu_cycle < 320) {
+            // No fetches happen here
             return;
         }
 
         if self.ppu_cycle > 336 {
-            // FIXME: Fetches after this cycle are special and fetch two garbage nametables. Might
-            // not need to implement this
+            // Fetches after this cycle are special and fetch two garbage nametables. Doesn't seem
+            // to be needed for now
             // https://www.nesdev.org/wiki/PPU_rendering#Pre-render_scanline_(-1_or_261)
             return;
         }
 
-        // FIXME: A possible performance improvement would be to pre-allocate a scanline-size buffer
+        if (self.ppu_cycle - 1) % 8 != 0 {
+            // Real HW does the fetches throughout these cycles but we just batch them together.
+            // This method considerably improves performance of the fetches
+            return;
+        }
+
+        // A possible performance improvement would be to pre-allocate a scanline-size buffer
         // for tiles where we could then render all at once. We could potentially do the tile fetches
         // in one-shot as well. Would need to validate that this works with scrolling though before
         // changing it
-        if (self.ppu_cycle - 1) % 8 == 0 {
-            timer::timed!("ppu::tile fetch", {
-                self.do_prepare_next_tile();
-                self.do_nametable_fetch();
-                self.do_attribute_fetch();
-                self.do_pattern_fetch();
-            });
-        }
+        timer::timed!("ppu::tile fetch", {
+            self.do_prepare_next_tile();
+            self.do_nametable_fetch();
+            self.do_attribute_fetch();
+            self.do_pattern_fetch();
+        });
     }
 
     fn tick_once(&mut self) {
@@ -799,18 +803,7 @@ impl PPU {
         // 0 is transparent, filter these out
         let color_idx = tile_lohi_to_idx(*pattern_lo, *pattern_hi);
         for (px, &lo) in color_idx.iter().enumerate() {
-            assert!(lo < 4);
-
-            let palette_addr = (d4 << 4) | (d3_d2 << 2) | lo;
-            let color_idx = self.palette_read(palette_addr as u16);
-            let color = PALETTE_COLOR_LUT[color_idx as usize];
-
-            let buf_addr = PX_SIZE_BYTES * (base_addr + px);
-            let render_slice = &mut self.frame_buf[buf_addr..(buf_addr + PX_SIZE_BYTES)];
-
-            // FIXME: add extra checks mode
-            // assert!(render_slice.iter().all(|&p| p == 0));
-            render_slice.copy_from_slice(&to_u8_slice(color));
+            self.draw_pixel(base_addr, px, d4, d3_d2, lo);
         }
     }
 
@@ -1037,26 +1030,39 @@ impl PPU {
             let color_idx = tile_lohi_to_idx(pattern_lo, pattern_hi);
             let px_idx = PPU::create_range(sprite.horiz_flip(), 8);
 
-            // FIXME: factor this out to merge with background
             let base_addr = self.render_base_address(sprite.x() as usize);
             for (px, &lo) in px_idx.zip(color_idx.iter()).filter(|(_, &lo)| lo != 0) {
-                assert!(lo < 4);
-
-                let palette_addr = (d4 << 4) | (d3_d2 << 2) | lo;
-                let color_idx = self.palette_read(palette_addr as u16);
-                let color = PALETTE_COLOR_LUT[color_idx as usize];
-
-                let buf_addr = PX_SIZE_BYTES * (base_addr + px);
-                let render_slice = &mut self.frame_buf[buf_addr..(buf_addr + PX_SIZE_BYTES)];
-
-                // FIXME: add extra checks mode
-                // assert!(render_slice.iter().all(|&p| p == 0));
-                render_slice.copy_from_slice(&to_u8_slice(color));
+                self.draw_pixel(base_addr, px, d4, d3_d2, lo);
             }
         }
     }
 
+    fn draw_pixel(&mut self, base: usize, px: usize, d4: u8, d3_d2: u8, d1_d0: u8) {
+        assert!(d4 < 2);
+        assert!(d3_d2 < 4);
+        assert!(d1_d0 < 4);
+
+        let palette_addr = (d4 << 4) | (d3_d2 << 2) | d1_d0;
+        let color_idx = self.palette_read(palette_addr as u16);
+        let color = PALETTE_COLOR_LUT[color_idx as usize];
+
+        let buf_addr = PX_SIZE_BYTES * (base + px);
+        let render_slice = &mut self.frame_buf[buf_addr..(buf_addr + PX_SIZE_BYTES)];
+
+        let color_slice = &to_u8_slice(color);
+        if !self.needs_render {
+            self.needs_render = color_slice != render_slice;
+        }
+        render_slice.copy_from_slice(color_slice);
+    }
+
     fn render_frame(&mut self) {
+        if !self.needs_render {
+            return;
+        }
+
+        self.needs_render = false;
+
         self.renderer.render_frame(
             &self.frame_buf,
             FRAME_WIDTH_PX as u32,
