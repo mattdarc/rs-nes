@@ -22,7 +22,7 @@ thread_local! {
     static LOCAL_REGISTRY: UnsafeCell<TimeResultRegistry> = UnsafeCell::new(TimeResultRegistry::default());
 }
 
-#[cfg(not(test))]
+#[cfg(not(feature = "notimers"))]
 macro_rules! timed {
     ($name:literal, $contents:block) => {{
         use lazy_static::lazy_static;
@@ -35,7 +35,7 @@ macro_rules! timed {
     }};
 }
 
-#[cfg(test)]
+#[cfg(feature = "notimers")]
 macro_rules! timed {
     ($name:literal, $contents:block) => {{
         $contents
@@ -130,25 +130,6 @@ impl ScopedTimer {
 impl Drop for ScopedTimer {
     fn drop(&mut self) {
         TimeResultRegistry::add(self.name, self.start.elapsed())
-    }
-}
-
-pub struct DynamicTimer {
-    name: TimerName,
-    start: FastInstant,
-}
-
-impl DynamicTimer {
-    pub fn new(name: &'static str) -> Self {
-        DynamicTimer {
-            name: TimerName::new(name),
-            start: FastInstant::now(),
-        }
-    }
-
-    pub fn restart(&mut self) {
-        TimeResultRegistry::add(&self.name, self.start.elapsed());
-        self.start = FastInstant::now();
     }
 }
 

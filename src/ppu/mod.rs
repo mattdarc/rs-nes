@@ -171,7 +171,6 @@ impl PPU {
             frame: 0,
             tile_q,
             ppudata_buffer: 0,
-
             vram: RAM::with_size(PPU_VRAM_SIZE),
         }
     }
@@ -412,7 +411,7 @@ impl PPU {
         }
     }
 
-    fn do_clear_frame_flags(&mut self) {
+    fn do_start_frame(&mut self) {
         self.registers.status &= !PpuStatus::SPRITE_0_HIT;
         self.registers.status &= !PpuStatus::VBLANK_STARTED;
         self.registers.status &= !PpuStatus::SPRITE_OVERFLOW;
@@ -605,7 +604,7 @@ impl PPU {
 
         // https://www.nesdev.org/wiki/PPU_rendering
         match (self.scanline, self.ppu_cycle) {
-            (-1, 1) => timer::timed!("ppu::clear flags", { self.do_clear_frame_flags() }),
+            (-1, 1) => timer::timed!("ppu::clear flags", { self.do_start_frame() }),
             (-1, _) => { /* dummy scanline */ }
 
             // Visible scanlines (0-239)

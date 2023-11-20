@@ -21,6 +21,9 @@ path = "src/tests/rom_tests.rs"
 name = "ppu_tests"
 path = "src/tests/ppu_tests.rs"
 
+[features]
+notimers = []
+
 [profile.release]
 debug = true
 
