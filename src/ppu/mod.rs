@@ -90,7 +90,6 @@ pub struct PPU {
     cycle: i16,
     scanline: i16,
     frame: usize,
-    last_tile: i16,
     tile_q: VecDeque<Tile>,
     ppudata_buffer: u8,
 
@@ -164,7 +163,6 @@ impl PPU {
             cycle: 0,
             scanline: -1,
             frame: 0,
-            last_tile: 0,
             tile_q,
             ppudata_buffer: 0,
 
@@ -393,6 +391,7 @@ impl PPU {
     }
 
     fn do_end_frame(&mut self) {
+        self.scanline = -1;
         self.frame += 1;
         self.flags.has_nmi = false;
         self.flags.odd = !self.flags.odd;
@@ -594,23 +593,14 @@ impl PPU {
 
             // Visible scanlines (0-239)
             (0..240, 0) => { /* idle cycle */ }
-            (0..240, 1..256) => {
-                // FIXME: Similar to do_tile_fetches, if we update that to use a tile-array then
-                // this becomes simpler since we can write one scanline at a time at the end of the
-                // frame. We could also dispatch another thread potentially for the rendering,
-                // resulting in a
-                //  -- Event thread for listening to user interactions
-                //  -- A NES thread for CPU, PPU, etc work
-                //  -- A rendering thread where we send only rendering data
-                let tile_x = (self.cycle - 1) / TILE_WIDTH_PX as i16;
-                if tile_x != self.last_tile {
+            (0..240, (1..256)) => {
+                if ((self.cycle - 1) % TILE_WIDTH_PX as i16) == 0 {
                     timer::timed!("ppu::draw background", {
                         // Render one tile at a time. This is how frequently the real hardware is
                         // updated. A possible cycle-accurate improvememt would be to do this fetch
                         // every 8 cycles but write the pixels every cycle. Not sure if we actually
                         // need to do this to get a workable game.
                         self.draw_background();
-                        self.last_tile = tile_x;
                     });
                 }
             }
@@ -645,7 +635,6 @@ impl PPU {
             self.scanline += 1;
             if self.scanline > SCANLINES_PER_FRAME as i16 {
                 timer::timed!("ppu::EOF", {
-                    self.scanline = -1;
                     self.do_end_frame();
                 });
             }
