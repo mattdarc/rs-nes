@@ -227,7 +227,7 @@ impl<BusType: Bus> CPU<BusType> {
             }
         }
 
-        self.bus.clock(self.cycles);
+        self.bus.clock(self.cycles as usize);
 
         self.exit_status.clone()
     }

@@ -78,6 +78,7 @@ pub struct PPU {
     cartridge_chr: ROM,
 
     registers: Registers,
+    ppudata_buffer: u8,
     flags: Flags,
     vram: RAM,
     renderer: Box<dyn Renderer>,
@@ -86,12 +87,15 @@ pub struct PPU {
     oam_primary: [u8; 256], // Reinterpreted as sprites
     oam_secondary: OamSecondary,
 
-    // Background
-    cycle: i16,
+    // Number of cycles the NES has simulated outside of the PPU. The PPU may lag behind or skip
+    // frames entirely if the result of the frame is neither human nor software visible
+    cycles_behind: usize,
+    ppu_cycle: i16,
     scanline: i16,
     frame: usize,
+
+    // Background
     tile_q: VecDeque<Tile>,
-    ppudata_buffer: u8,
 
     palette_table: [u8; 32],
 }
@@ -160,7 +164,9 @@ impl PPU {
             renderer,
             oam_primary: [0; 256],
             oam_secondary: OamSecondary::default(),
-            cycle: 0,
+
+            cycles_behind: 0,
+            ppu_cycle: 0,
             scanline: -1,
             frame: 0,
             tile_q,
@@ -171,7 +177,7 @@ impl PPU {
     }
 
     pub fn cycle(&self) -> i16 {
-        self.cycle
+        self.ppu_cycle
     }
 
     pub fn scanline(&self) -> i16 {
@@ -183,6 +189,8 @@ impl PPU {
             0 => self.registers.ctrl,
             1 => self.registers.mask,
             2 => {
+                self.tick_n();
+
                 self.registers.addr.reset();
 
                 let val = self.registers.status;
@@ -200,6 +208,8 @@ impl PPU {
                 0x0
             }
             7 => {
+                self.tick_n();
+
                 let addr = self.registers.addr.to_u16();
                 self.ppudata_addr_incr();
 
@@ -221,7 +231,7 @@ impl PPU {
         event!(
             Level::DEBUG,
             "[CYC:{}][SL:{}] ppu::register_read [{:#x}] (== {:#x})",
-            self.cycle,
+            self.ppu_cycle,
             self.scanline,
             addr,
             ret
@@ -236,7 +246,7 @@ impl PPU {
             event!(
                 Level::DEBUG,
                 "[CYC:{}][SL:{}] ppu::register_write [{:#x}] VRAM({:#x}) = {:#x}",
-                self.cycle,
+                self.ppu_cycle,
                 self.scanline,
                 addr,
                 self.registers.addr.to_u16(),
@@ -246,7 +256,7 @@ impl PPU {
             event!(
                 Level::DEBUG,
                 "[CYC:{}][SL:{}] ppu::register_write [{:#x}] = {:#x}",
-                self.cycle,
+                self.ppu_cycle,
                 self.scanline,
                 addr,
                 val
@@ -255,6 +265,8 @@ impl PPU {
 
         match regnum {
             0 => {
+                self.tick_n();
+
                 self.registers.ctrl = val;
                 self.registers.addr.set_nametable(val);
             }
@@ -271,9 +283,19 @@ impl PPU {
                 }
                 self.registers.oamaddr = self.registers.oamaddr.wrapping_add(1);
             }
-            5 => self.registers.addr.scroll_write(val),
-            6 => self.registers.addr.addr_write(val),
+            5 => {
+                self.tick_n();
+
+                self.registers.addr.scroll_write(val);
+            }
+            6 => {
+                self.tick_n();
+
+                self.registers.addr.addr_write(val);
+            }
             7 => {
+                self.tick_n();
+
                 let addr = self.registers.addr.to_u16();
                 self.ppudata_addr_incr();
                 self.ppu_internal_write(addr, val);
@@ -368,11 +390,17 @@ impl PPU {
         (self.registers.mask & (PpuMask::SHOW_SPRITES | PpuMask::SHOW_BG)) != 0
     }
 
+    fn total_ppu_cycles(&self) -> usize {
+        (1 + self.scanline) as usize * CYCLES_PER_SCANLINE
+            + self.ppu_cycle as usize
+            + self.cycles_behind
+    }
+
     fn do_start_vblank(&mut self) {
         event!(
             Level::DEBUG,
             "[CYC:{:<3}][SL:{:<3}] VBI",
-            self.cycle,
+            self.ppu_cycle,
             self.scanline,
         );
 
@@ -459,7 +487,7 @@ impl PPU {
         self.back_tile_mut().attribute_byte = attribute_byte;
     }
 
-    fn do_pattern_lo_fetch(&mut self) {
+    fn do_pattern_fetch(&mut self) {
         let v = self.registers.addr.to_u16();
         let fine_y = (v >> 12) & 0x7;
 
@@ -468,16 +496,6 @@ impl PPU {
 
         let pattable_addr = tile_base | fine_y;
         self.back_tile_mut().pattern_lo = self.ppu_internal_read(pattable_addr);
-    }
-
-    fn do_pattern_hi_fetch(&mut self) {
-        let v = self.registers.addr.to_u16();
-        let fine_y = (v >> 12) & 0x7;
-
-        let tile_base = self.bg_table_base()
-            | ((self.back_tile_mut().nametable_byte as u16) << TILE_STRIDE_SHIFT);
-        let pattable_addr = tile_base | fine_y;
-
         self.back_tile_mut().pattern_hi =
             self.ppu_internal_read(pattable_addr + TILE_HI_OFFSET_BYTES);
     }
@@ -488,7 +506,7 @@ impl PPU {
         event!(
             Level::DEBUG,
             "[CYC:{:<3}][SL:{:<3}] TILE:{:X} V({:#<04X}): (NT={:0X}, ATTR={:0X}, LO={:0X}, HI={:0X})",
-            self.cycle,
+            self.ppu_cycle,
             self.scanline,
             self.registers.addr.to_u16(),
             self.back_tile().number,
@@ -519,7 +537,7 @@ impl PPU {
 
     fn update_vaddr(&mut self) {
         let prev_addr = self.registers.addr.to_u16();
-        match self.cycle {
+        match self.ppu_cycle {
             0 => { /* skipped */ }
             8 | 16 | 24 | 32 | 40 | 48 | 56 | 64 | 72 | 80 | 88 | 96 | 104 | 112 | 120 | 128
             | 136 | 144 | 152 | 160 | 168 | 176 | 184 | 192 | 200 | 208 | 216 | 224 | 232 | 240
@@ -541,7 +559,7 @@ impl PPU {
             event!(
                 Level::DEBUG,
                 "[CYC:{:<3}][SL:{:<3}] V({:#X}) ==> V({:#X})",
-                self.cycle,
+                self.ppu_cycle,
                 self.scanline,
                 prev_addr,
                 self.registers.addr.to_u16(),
@@ -550,16 +568,16 @@ impl PPU {
     }
 
     fn do_tile_fetches(&mut self) {
-        if self.cycle == 0 {
+        if self.ppu_cycle == 0 {
             return;
         }
 
-        if 257 <= self.cycle && self.cycle < 320 {
+        if 257 <= self.ppu_cycle && self.ppu_cycle < 320 {
             // No fetches happen here, this is where sprites are fetched (we don't yet though)
             return;
         }
 
-        if self.cycle > 336 {
+        if self.ppu_cycle > 336 {
             // FIXME: Fetches after this cycle are special and fetch two garbage nametables. Might
             // not need to implement this
             // https://www.nesdev.org/wiki/PPU_rendering#Pre-render_scanline_(-1_or_261)
@@ -570,38 +588,35 @@ impl PPU {
         // for tiles where we could then render all at once. We could potentially do the tile fetches
         // in one-shot as well. Would need to validate that this works with scrolling though before
         // changing it
-        match (self.cycle - 1) % 8 {
-            0 => self.do_prepare_next_tile(),
-            1 => self.do_nametable_fetch(),
-            3 => self.do_attribute_fetch(),
-            5 => self.do_pattern_lo_fetch(),
-            7 => self.do_pattern_hi_fetch(),
-            2 | 4 | 6 => {}
-            _ => unreachable!(),
+        if (self.ppu_cycle - 1) % 8 == 0 {
+            timer::timed!("ppu::tile fetch", {
+                self.do_prepare_next_tile();
+                self.do_nametable_fetch();
+                self.do_attribute_fetch();
+                self.do_pattern_fetch();
+            });
         }
     }
 
     fn tick_once(&mut self) {
         if !self.is_blanking() {
-            timer::timed!("ppu::tile fetch", { self.do_tile_fetches() });
+            self.do_tile_fetches();
         }
 
         // https://www.nesdev.org/wiki/PPU_rendering
-        match (self.scanline, self.cycle) {
+        match (self.scanline, self.ppu_cycle) {
             (-1, 1) => timer::timed!("ppu::clear flags", { self.do_clear_frame_flags() }),
             (-1, _) => { /* dummy scanline */ }
 
             // Visible scanlines (0-239)
             (0..240, 0) => { /* idle cycle */ }
             (0..240, (1..256)) => {
-                if ((self.cycle - 1) % TILE_WIDTH_PX as i16) == 0 {
-                    timer::timed!("ppu::draw background", {
-                        // Render one tile at a time. This is how frequently the real hardware is
-                        // updated. A possible cycle-accurate improvememt would be to do this fetch
-                        // every 8 cycles but write the pixels every cycle. Not sure if we actually
-                        // need to do this to get a workable game.
-                        self.draw_background();
-                    });
+                if ((self.ppu_cycle - 1) % TILE_WIDTH_PX as i16) == 0 {
+                    // Render one tile at a time. This is how frequently the real hardware is
+                    // updated. A possible cycle-accurate improvement would be to do this fetch
+                    // every 8 cycles but write the pixels every cycle. Not sure if we actually
+                    // need to do this to get a workable game.
+                    timer::timed!("ppu::draw background", { self.draw_background() });
                 }
             }
             // Draw sprites once on the last visible cycle so they're over the background
@@ -615,9 +630,7 @@ impl PPU {
 
             (240, _) => { /* idle scanline */ }
 
-            (241, 1) => timer::timed!("ppu::vblank", {
-                self.do_start_vblank();
-            }),
+            (241, 1) => timer::timed!("ppu::vblank", { self.do_start_vblank() }),
             (241..261, _) => { /* PPU should make no memory accesses */ }
 
             (scanline, cycle) => unreachable!("scanline={}, cycle={}", scanline, cycle),
@@ -627,11 +640,11 @@ impl PPU {
             self.update_vaddr();
         }
 
-        self.cycle += 1;
+        self.ppu_cycle += 1;
 
         // End this scanline
-        if self.cycle >= CYCLES_PER_SCANLINE as i16 {
-            self.cycle -= CYCLES_PER_SCANLINE as i16;
+        if self.ppu_cycle >= CYCLES_PER_SCANLINE as i16 {
+            self.ppu_cycle -= CYCLES_PER_SCANLINE as i16;
             self.scanline += 1;
             if self.scanline > SCANLINES_PER_FRAME as i16 {
                 timer::timed!("ppu::EOF", {
@@ -642,12 +655,30 @@ impl PPU {
     }
 
     #[tracing::instrument(target = "ppu", skip(self))]
-    pub fn clock(&mut self, ticks: i16) {
-        timer::timed!("ppu", {
-            for _ in 0..ticks {
-                self.tick_once();
-            }
-        });
+    pub fn clock(&mut self, ticks: usize) {
+        self.cycles_behind += ticks;
+
+        let total_cycles = self.total_ppu_cycles();
+
+        const VBLANK_START_SL: usize = 241;
+        const VBLANK_START: usize = VBLANK_START_SL * CYCLES_PER_SCANLINE + 1;
+        const VBLANK_END: usize = SCANLINES_PER_FRAME * CYCLES_PER_SCANLINE;
+
+        if self.registers.ctrl & PpuCtrl::NMI_ENABLE != 0 && total_cycles >= VBLANK_START {
+            self.tick_n();
+        } else if total_cycles >= VBLANK_END {
+            self.do_end_frame();
+            self.ppu_cycle = 0;
+            self.cycles_behind = total_cycles - VBLANK_END;
+        }
+    }
+
+    fn tick_n(&mut self) {
+        for _ in 0..self.cycles_behind {
+            self.tick_once();
+        }
+
+        self.cycles_behind = 0;
     }
 
     fn bg_table_base(&self) -> u16 {
@@ -698,7 +729,7 @@ impl PPU {
     fn is_visible_cycle(&self) -> bool {
         0 <= self.scanline
             && self.scanline < VISIBLE_SCANLINES as i16
-            && self.cycle < VISIBLE_CYCLES as i16
+            && self.ppu_cycle < VISIBLE_CYCLES as i16
     }
 
     /// Compute the rendering base address into the buffer to render at the current scanline at the
@@ -762,7 +793,7 @@ impl PPU {
         };
 
         // Rendering the background shouldbe tile-aligned
-        let x = (self.cycle - 1) as usize;
+        let x = (self.ppu_cycle - 1) as usize;
         assert!((x % TILE_WIDTH_PX) == 0);
         let base_addr = self.render_base_address(x);
 
@@ -919,7 +950,7 @@ impl PPU {
         }
 
         const FIRST_CYCLE: i16 = 257;
-        let n = (self.cycle - FIRST_CYCLE) as usize;
+        let n = (self.ppu_cycle - FIRST_CYCLE) as usize;
         assert!(n < 64);
 
         // Process the sprite in the primary OAM at this location. If it is in the range of the

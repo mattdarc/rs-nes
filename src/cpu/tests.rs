@@ -40,7 +40,7 @@ impl Bus for TestBus {
         0
     }
 
-    fn clock(&mut self, _cycles: u8) {}
+    fn clock(&mut self, _cycles: usize) {}
 
     fn pop_nmi(&mut self) -> Option<u8> {
         None

@@ -22,7 +22,7 @@ pub trait Bus {
         (0..n).map(|idx| self.read(addr + idx)).collect::<Vec<_>>()
     }
     fn cycles(&self) -> usize;
-    fn clock(&mut self, cycles: u8);
+    fn clock(&mut self, cycles: usize);
     fn pop_nmi(&mut self) -> Option<u8>;
     fn ppu_state(&self) -> (i16, i16) {
         (0, 0)
@@ -39,7 +39,7 @@ pub struct NesBus {
     nmi: Option<u8>,
 
     total_cycles: usize,
-    sync_cycles: usize,
+    cycles_last_sync: usize,
     last_sync: timer::FastInstant,
 }
 
@@ -55,7 +55,7 @@ impl NesBus {
             nmi: None,
 
             total_cycles: 0,
-            sync_cycles: 0,
+            cycles_last_sync: 0,
             last_sync: timer::FastInstant::now(),
         }
     }
@@ -72,23 +72,23 @@ impl NesBus {
     }
 
     fn throttle_to_ntsc(&mut self) {
-        const SYNC_CYCLES: usize = 20_000;
-        if self.sync_cycles < SYNC_CYCLES {
+        const FREERUN_CYCLES: usize = 20_000;
+        if self.cycles_last_sync < FREERUN_CYCLES {
             return;
         }
 
         const SLEEP_OVERHEAD_US: u64 = 400;
-        const SYNC_RESOLUTION_US: u64 = (1_000_000 * SYNC_CYCLES / NTSC_CLOCK_MHZ) as u64;
+        const SYNC_RESOLUTION_US: u64 = (1_000_000 * FREERUN_CYCLES / NTSC_CLOCK_MHZ) as u64;
         const SIMULATED_DURATION: timer::Duration =
             timer::Duration::from_micros(SYNC_RESOLUTION_US - SLEEP_OVERHEAD_US);
 
         let real_duration = self.last_sync.elapsed();
         if let Some(delta) = SIMULATED_DURATION.checked_sub(real_duration) {
-            timer::timed!("sync", { std::thread::sleep(delta) });
+            timer::timed!("sleep", { std::thread::sleep(delta) });
         }
 
         self.last_sync = timer::FastInstant::now();
-        self.sync_cycles = 0;
+        self.cycles_last_sync = 0;
     }
 }
 
@@ -165,11 +165,13 @@ impl Bus for NesBus {
         self.total_cycles
     }
 
-    fn clock(&mut self, cycles: u8) {
-        self.total_cycles += cycles as usize;
-        self.sync_cycles += cycles as usize;
+    fn clock(&mut self, cycles: usize) {
+        self.total_cycles += cycles;
+        self.cycles_last_sync += cycles;
 
-        self.ppu.clock(3 * cycles as i16);
+        const PPU_CYCLES_PER: usize = 3;
+        timer::timed!("ppu", { self.ppu.clock(PPU_CYCLES_PER * cycles) });
+
         if self.ppu.generate_nmi() {
             self.nmi = Some(1);
         }
