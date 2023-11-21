@@ -118,6 +118,14 @@ fn negative() {
     assert!(!is_negative(0));
 }
 
+#[test]
+fn test_sign_extend() {
+    assert_eq!(sign_extend(0_u8), 0);
+    assert_eq!(sign_extend(128_u8), 0xFF80);
+    assert_eq!(sign_extend(127_u8), 127);
+    assert_eq!(sign_extend(131_u8), 0xFF83);
+}
+
 // TODO: Add flag verification
 #[test]
 fn adc() {

@@ -39,6 +39,11 @@ fn crosses_page(src: u16, dst: u16) -> bool {
     (src & 0xFF00) != (dst & 0xFF00)
 }
 
+#[inline]
+fn sign_extend(x: u8) -> u16 {
+    unsafe { std::mem::transmute((x as i16).wrapping_shl(8).wrapping_shr(8)) }
+}
+
 const STACK_BEGIN: u16 = 0x0100;
 
 //  ADDRESSES	 |  VECTOR

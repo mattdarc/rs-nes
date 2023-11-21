@@ -176,14 +176,10 @@ impl<T: Bus> Interpreter<T> {
         }
     }
 
-    fn do_branch(&mut self, state: &mut CpuState, dst: u8) -> u16 {
-        // FIXME: we can likely implement this as i8
+    fn do_branch(&mut self, state: &mut CpuState, offset: u8) -> u16 {
         let pc_before = state.pc.wrapping_add(self.instruction.size());
-        let next_pc = if is_negative(dst) {
-            pc_before.wrapping_sub(dst.wrapping_neg() as u16)
-        } else {
-            pc_before.wrapping_add(dst as u16)
-        };
+        let offset = sign_extend(offset);
+        let next_pc = pc_before.wrapping_add(offset);
         let crossed_page = crosses_page(pc_before, next_pc);
 
         // Crossing a page adds an extra cycle
