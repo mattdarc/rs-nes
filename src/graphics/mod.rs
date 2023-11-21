@@ -12,14 +12,15 @@ pub mod constants {
     pub const WINDOW_HEIGHT_MUL: u32 = 3;
     pub const WINDOW_WIDTH: u32 = NES_SCREEN_WIDTH * WINDOW_WIDTH_MUL;
     pub const WINDOW_HEIGHT: u32 = NES_SCREEN_HEIGHT * WINDOW_HEIGHT_MUL;
-    pub const FRAME_RATE_MS: u32 = 1_000 / 60;
+    pub const FRAME_RATE_US: u32 = 1_000_0000 / 30;
     pub const NES_SCREEN_WIDTH: u32 = 256;
     pub const NES_SCREEN_HEIGHT: u32 = 240;
 }
 
 pub trait Renderer {
-    fn render_line(&mut self, line: &[u8], row: u32);
-    fn render_frame(&mut self, buf: &[u8], width: u32, height: u32);
+    fn draw_line(&mut self, line: &[u8], row: u32);
+    fn draw_frame(&mut self, buf: &[u8]);
+    fn present(&mut self) {}
 }
 
 fn dump_texture_buf(buf: &[u8], px_size: usize) {

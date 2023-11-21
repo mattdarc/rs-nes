@@ -29,6 +29,10 @@ use tracing::{event, Level};
 pub type NesBus = bus::NesBus;
 pub type NesCPU = CPU<NesBus>;
 
+const NES_FRAME_HEIGHT_PX: usize = 240;
+const NES_FRAME_WIDTH_PX: usize = 256;
+const NES_FRAME_RATE_HZ: usize = 60;
+
 #[derive(Debug)]
 pub enum NesError {
     Stub,
@@ -61,7 +65,13 @@ unsafe impl<'a> Send for VNES<'a> {}
 impl<'a> VNES<'a> {
     pub fn new(rom: &str) -> std::io::Result<Self> {
         let game = load_cartridge(rom)?;
-        let bus = NesBus::new(game, Box::new(graphics::sdl2::SDLRenderer::new()));
+        let bus = NesBus::new(
+            game,
+            Box::new(graphics::sdl2::SDLRenderer::new(
+                NES_FRAME_WIDTH_PX,
+                NES_FRAME_HEIGHT_PX,
+            )),
+        );
         Ok(VNES {
             cpu: CPU::new(bus),
             pre_execute_tasks: TaskList::new(Vec::new()),

@@ -1,13 +1,10 @@
-/// TODO: This should be moved out into another module that implements the graphics/ui interface.
-/// Or provided as the default ui
-///
 use super::constants::*;
 use super::Renderer;
 use crate::timer;
 use sdl2::pixels::PixelFormatEnum;
 use sdl2::rect::Rect;
-use sdl2::render::{TextureAccess, TextureCreator, WindowCanvas};
-use sdl2::video::{DisplayMode, WindowContext};
+use sdl2::render::{Texture, WindowCanvas};
+use sdl2::video::DisplayMode;
 use std::mem::MaybeUninit;
 use std::sync::Once;
 
@@ -26,18 +23,28 @@ impl SDL2Intrf {
     }
 }
 
-pub struct SDLRenderer {
+pub struct SDLRenderer<'a> {
     canvas: WindowCanvas,
-    tex_creator: TextureCreator<WindowContext>,
+    texture: Texture<'a>,
+    width_px: usize,
+    height_px: usize,
 }
 
-impl SDLRenderer {
-    pub fn new() -> Self {
+impl SDLRenderer<'_> {
+    pub fn new(width: usize, height: usize) -> Self {
         let canvas = SDLRenderer::init_canvas();
-        let tex_creator = canvas.texture_creator();
+        // FIXME: Ideally we wouldn't need to leak but I can't get the lifetime right here...
+        // Since we create only one of these it should be fine
+        let tex_creator = Box::leak(Box::new(canvas.texture_creator()));
+        let texture = tex_creator
+            .create_texture_target(None, width as u32, height as u32)
+            .unwrap();
+
         SDLRenderer {
             canvas,
-            tex_creator,
+            texture,
+            width_px: width,
+            height_px: height,
         }
     }
 
@@ -71,20 +78,16 @@ impl SDLRenderer {
     }
 }
 
-impl Renderer for SDLRenderer {
-    fn render_line(&mut self, scanline: &[u8], row: u32) {
-        timer::timed!("render", {
+impl Renderer for SDLRenderer<'_> {
+    fn draw_line(&mut self, scanline: &[u8], row: u32) {
+        timer::timed!("render::draw", {
             assert_eq!(
                 scanline.len() as u32,
                 NES_SCREEN_WIDTH,
                 "scanline is not the width of the screen!"
             );
 
-            let mut texture = self
-                .tex_creator
-                .create_texture(None, TextureAccess::Streaming, NES_SCREEN_WIDTH, 1)
-                .unwrap();
-            texture
+            self.texture
                 .update(None, &scanline, (NES_SCREEN_WIDTH * PX_SIZE_BYTES) as usize)
                 .unwrap();
 
@@ -95,30 +98,31 @@ impl Renderer for SDLRenderer {
                 WINDOW_HEIGHT_MUL,
             );
 
-            self.canvas.copy(&texture, None, Some(dst_rect)).unwrap();
-            self.canvas.present();
+            self.canvas
+                .copy(&self.texture, None, Some(dst_rect))
+                .unwrap();
         })
     }
 
     /// Display a buffer buf on the screen. The format of the buffer is assumed to be in the RGB888
     /// format
-    fn render_frame(&mut self, buf: &[u8], width: u32, height: u32) {
-        timer::timed!("render", {
-            let mut texture = self
-                .tex_creator
-                .create_texture_target(None, width, height)
-                .unwrap();
+    fn draw_frame(&mut self, buf: &[u8]) {
+        let pitch_bytes: usize = PX_SIZE_BYTES as usize * self.width_px;
+        assert_eq!(buf.len(), pitch_bytes * self.height_px);
 
-            let pitch_bytes: usize = PX_SIZE_BYTES as usize * width as usize;
-            texture.update(None, &buf, pitch_bytes).unwrap();
-            self.canvas.copy(&texture, None, None).unwrap();
-            self.canvas.present();
+        timer::timed!("render::draw", {
+            self.texture.update(None, &buf, pitch_bytes).unwrap();
+            self.canvas.copy(&self.texture, None, None).unwrap();
         });
+    }
+
+    fn present(&mut self) {
+        timer::timed!("render::present", { self.canvas.present() });
     }
 }
 
-impl Clone for SDLRenderer {
+impl Clone for SDLRenderer<'_> {
     fn clone(&self) -> Self {
-        SDLRenderer::new()
+        SDLRenderer::new(self.width_px, self.height_px)
     }
 }

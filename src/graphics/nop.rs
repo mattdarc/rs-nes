@@ -8,6 +8,6 @@ impl NOPRenderer {
 }
 
 impl Renderer for NOPRenderer {
-    fn render_line(&mut self, _line: &[u8], _row: u32) {}
-    fn render_frame(&mut self, _buf: &[u8], _width: u32, _height: u32) {}
+    fn draw_line(&mut self, _line: &[u8], _row: u32) {}
+    fn draw_frame(&mut self, _buf: &[u8]) {}
 }

@@ -7,6 +7,7 @@ use crate::cartridge::Cartridge;
 use crate::graphics::Renderer;
 use crate::memory::{RAM, ROM};
 use crate::timer;
+use crate::{NES_FRAME_HEIGHT_PX, NES_FRAME_WIDTH_PX};
 use flags::*;
 use registers::*;
 use sprite::Sprite;
@@ -30,12 +31,9 @@ const TILE_HEIGHT_PX: usize = 8;
 const TILE_SIZE_BYTES: usize = 16;
 
 const FRAME_NUM_TILES: usize = FRAME_WIDTH_TILES * FRAME_HEIGHT_TILES;
-const FRAME_WIDTH_TILES: usize = 32;
-const FRAME_HEIGHT_TILES: usize = 30;
-const FRAME_HEIGHT_PX: usize = FRAME_HEIGHT_TILES * TILE_HEIGHT_PX;
-const FRAME_WIDTH_PX: usize = FRAME_WIDTH_TILES * TILE_WIDTH_PX;
-const FRAME_SIZE_BYTES: usize =
-    PX_SIZE_BYTES * (FRAME_HEIGHT_PX as usize) * (FRAME_WIDTH_PX as usize);
+const FRAME_WIDTH_TILES: usize = NES_FRAME_WIDTH_PX / TILE_WIDTH_PX;
+const FRAME_HEIGHT_TILES: usize = NES_FRAME_HEIGHT_PX / TILE_HEIGHT_PX;
+const FRAME_SIZE_BYTES: usize = PX_SIZE_BYTES * NES_FRAME_HEIGHT_PX * NES_FRAME_WIDTH_PX;
 
 const PALETTE_COLOR_LUT: [u32; 64] = [
     0x7C7C7C, 0x0000FC, 0x0000BC, 0x4428BC, 0x940084, 0xA80020, 0xA81000, 0x881400, 0x503000,
@@ -665,12 +663,8 @@ impl PPU {
         const VBLANK_START: usize = VBLANK_START_SL * CYCLES_PER_SCANLINE + 1;
         const VBLANK_END: usize = SCANLINES_PER_FRAME * CYCLES_PER_SCANLINE;
 
-        if self.registers.ctrl & PpuCtrl::NMI_ENABLE != 0 && total_cycles >= VBLANK_START {
+        if total_cycles >= VBLANK_START {
             self.tick_n();
-        } else if total_cycles >= VBLANK_END {
-            self.do_end_frame();
-            self.ppu_cycle = 0;
-            self.cycles_behind = total_cycles - VBLANK_END;
         }
     }
 
@@ -857,8 +851,7 @@ impl PPU {
             }
         }
 
-        self.renderer
-            .render_frame(&buf, FRAME_WIDTH_PX as u32, FRAME_HEIGHT_PX as u32);
+        self.renderer.draw_frame(&buf);
     }
 
     fn show_pattern_table(&mut self) {
@@ -920,7 +913,7 @@ impl PPU {
         // Format the pattern table s.t. 0x000-0x0FFF are on the left and 0x1000-0x1FFF are on the
         // right
         let half_frame: usize = buf.len() / 2;
-        const HALF_TILES: usize = TILE_HEIGHT_PX as usize * FRAME_WIDTH_PX as usize * PX_SIZE_BYTES;
+        const HALF_TILES: usize = TILE_HEIGHT_PX * NES_FRAME_WIDTH_PX * PX_SIZE_BYTES;
         let pattern_table = buf[..half_frame]
             .chunks(HALF_TILES)
             .zip(buf[half_frame..].chunks(HALF_TILES))
@@ -928,10 +921,7 @@ impl PPU {
             .collect::<Vec<_>>();
         assert_eq!(pattern_table.len(), buf.len());
 
-        const TEX_WIDTH_PX: u32 = FRAME_WIDTH_PX as u32;
-        const TEX_HEIGHT_PX: u32 = FRAME_HEIGHT_PX as u32 / 2;
-        self.renderer
-            .render_frame(&pattern_table, TEX_WIDTH_PX, TEX_HEIGHT_PX);
+        self.renderer.draw_frame(&pattern_table);
     }
 
     fn evaluate_sprites_next_scanline(&mut self) {
@@ -1057,12 +1047,8 @@ impl PPU {
         }
 
         self.needs_render = false;
-
-        self.renderer.render_frame(
-            &self.frame_buf,
-            FRAME_WIDTH_PX as u32,
-            FRAME_HEIGHT_PX as u32,
-        );
+        self.renderer.draw_frame(&self.frame_buf);
+        self.renderer.present();
     }
 }
 
