@@ -1,5 +1,4 @@
-use sdl2::audio::{AudioCallback, AudioSpecDesired};
-use std::time::Duration;
+use sdl2::audio::AudioCallback;
 
 struct SquareWave {
     phase_inc: f32,
@@ -26,6 +25,8 @@ impl AudioCallback for SquareWave {
 #[cfg(test)]
 mod tests {
     use super::*;
+    use sdl2::audio::AudioSpecDesired;
+    use std::time::Duration;
 
     #[ignore = "no audio"]
     #[test]

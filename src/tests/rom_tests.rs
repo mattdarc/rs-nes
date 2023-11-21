@@ -118,6 +118,7 @@ impl NestestParser {
     }
 }
 
+#[test]
 fn nestest() {
     const GOLD_FILE: &str = "test/nestest.log.gold";
     let nestest_state = NestestParser::new(GOLD_FILE).expect("Error parsing gold file");
@@ -130,7 +131,7 @@ fn nestest() {
     let num_states = nestest_state.cpu_states.len();
 
     let mut i = 0;
-    nes.add_pre_execute_task(Box::new(move |cpu: &mut dyn CpuInterface| {
+    nes.add_post_execute_task(Box::new(move |cpu: &mut dyn CpuInterface| {
         assert_eq!(cpu.read_state(), nestest_state.cpu_states[i]);
         i += 1;
     }));

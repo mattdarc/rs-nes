@@ -9,11 +9,6 @@ name = "venus"
 path = "src/lib.rs"
 
 [[test]]
-name = "sdl_tests"
-path = "src/graphics/sdl2/tests.rs"
-harness = false
-
-[[test]]
 name = "rom_tests"
 path = "src/tests/rom_tests.rs"
 

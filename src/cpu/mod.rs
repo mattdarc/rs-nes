@@ -131,10 +131,10 @@ impl<BusType: Bus> CpuInterface for CPU<BusType> {
             acc: self.state.acc,
             x: self.state.x,
             y: self.state.y,
-            pc: self.state.pc,
+            pc: self.last_pc,
             sp: self.state.sp,
             status: self.state.status.to_u8(),
-            scanline: scanline + 1, // nestest starts the PPU at the first scanline
+            scanline,
             ppu_cycle,
         }
     }
@@ -185,6 +185,7 @@ pub struct CPU<BusType: Bus> {
     state: CpuState,
     interpreter: interpreter::Interpreter<BusType>,
 
+    last_pc: u16,
     exit_status: ExitStatus,
 }
 
@@ -194,6 +195,7 @@ impl<BusType: Bus> CPU<BusType> {
             state: CpuState::new(),
             interpreter: interpreter::Interpreter::new(bus),
             exit_status: ExitStatus::Continue,
+            last_pc: 0,
         }
     }
 
@@ -202,10 +204,11 @@ impl<BusType: Bus> CPU<BusType> {
     }
 
     pub fn nestest_reset_override(&mut self, pc: u16) {
-        event!(Level::DEBUG, "reset PC {:#x} -> {:#x}", self.state.pc, pc);
+        self.interpreter.reset(&mut self.state);
         self.state.pc = pc;
-        self.state.status = Status::default();
-        self.state.sp = 0xFD;
+
+        // The gold log starts with 7 cycles clocked on the bus
+        self.interpreter.bus.clock(7);
     }
 
     pub fn reset(&mut self) {
@@ -219,6 +222,7 @@ impl<BusType: Bus> CPU<BusType> {
             "clock",
         );
 
+        self.last_pc = self.state.pc;
         let cycles = {
             let _enter = cpu_span.enter();
 

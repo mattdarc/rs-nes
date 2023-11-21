@@ -1,4 +1,4 @@
-use crate::cartridge::{Cartridge, CartridgeInterface};
+use crate::cartridge::Cartridge;
 use crate::memory::ROM;
 use tracing::{event, Level};
 
@@ -98,11 +98,12 @@ impl APU {
     }
 
     fn status_write(&self, val: u8) {
-        let pulse1_en = val & 0x1;
-        let pulse2_en = val & 0x2;
-        let triangle_en = val & 0x4;
-        let noise_en = val & 0x8;
-        let dmc_en = val & 0x10;
+        // FIXME: needs impl
+        let _pulse1_en = val & 0x1;
+        let _pulse2_en = val & 0x2;
+        let _triangle_en = val & 0x4;
+        let _noise_en = val & 0x8;
+        let _dmc_en = val & 0x10;
     }
 }
 

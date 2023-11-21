@@ -3,7 +3,7 @@ mod registers;
 mod sprite;
 
 use crate::cartridge::header::{Header, Mirroring};
-use crate::cartridge::{Cartridge, CartridgeInterface};
+use crate::cartridge::Cartridge;
 use crate::graphics::Renderer;
 use crate::memory::{RAM, ROM};
 use crate::timer;
@@ -180,11 +180,11 @@ impl PPU {
     }
 
     pub fn cycle(&self) -> i16 {
-        self.ppu_cycle
+        (self.total_ppu_cycles() % CYCLES_PER_SCANLINE) as i16
     }
 
     pub fn scanline(&self) -> i16 {
-        self.scanline
+        (self.total_ppu_cycles() / CYCLES_PER_SCANLINE) as i16
     }
 
     pub fn register_read(&mut self, addr: u16) -> u8 {

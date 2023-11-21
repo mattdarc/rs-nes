@@ -72,33 +72,32 @@ impl SDLRenderer {
 }
 
 impl Renderer for SDLRenderer {
-    // TODO: May need to find a way to batch these together, or clear() only
-    // when the screen needs to be updated
     fn render_line(&mut self, scanline: &[u8], row: u32) {
-        assert_eq!(
-            scanline.len() as u32,
-            NES_SCREEN_WIDTH,
-            "scanline is not the width of the screen!"
-        );
+        timer::timed!("render", {
+            assert_eq!(
+                scanline.len() as u32,
+                NES_SCREEN_WIDTH,
+                "scanline is not the width of the screen!"
+            );
 
-        // TODO: Should this be created each time or reused??
-        let mut texture = self
-            .tex_creator
-            .create_texture(None, TextureAccess::Streaming, NES_SCREEN_WIDTH, 1)
-            .unwrap();
-        texture
-            .update(None, &scanline, (NES_SCREEN_WIDTH * PX_SIZE_BYTES) as usize)
-            .unwrap();
+            let mut texture = self
+                .tex_creator
+                .create_texture(None, TextureAccess::Streaming, NES_SCREEN_WIDTH, 1)
+                .unwrap();
+            texture
+                .update(None, &scanline, (NES_SCREEN_WIDTH * PX_SIZE_BYTES) as usize)
+                .unwrap();
 
-        let dst_rect = Rect::new(
-            0,
-            (WINDOW_HEIGHT_MUL * row) as i32,
-            WINDOW_WIDTH,
-            WINDOW_HEIGHT_MUL,
-        );
+            let dst_rect = Rect::new(
+                0,
+                (WINDOW_HEIGHT_MUL * row) as i32,
+                WINDOW_WIDTH,
+                WINDOW_HEIGHT_MUL,
+            );
 
-        self.canvas.copy(&texture, None, Some(dst_rect)).unwrap();
-        self.canvas.present();
+            self.canvas.copy(&texture, None, Some(dst_rect)).unwrap();
+            self.canvas.present();
+        })
     }
 
     /// Display a buffer buf on the screen. The format of the buffer is assumed to be in the RGB888

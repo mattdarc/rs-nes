@@ -7,15 +7,6 @@ use mapper::*;
 use std::io::Read;
 use tracing::{event, Level};
 
-pub trait CartridgeInterface {
-    fn get_name(&self) -> String;
-    fn prg_read(&self, addr: u16) -> u8;
-    fn prg_write(&mut self, addr: u16, val: u8);
-    fn header(&self) -> Header;
-    fn dpcm(&self) -> ROM;
-    fn chr(&self) -> ROM;
-}
-
 #[derive(Debug, Default)]
 pub struct Cartridge {
     name: String,
@@ -25,16 +16,16 @@ pub struct Cartridge {
     mapper: Box<dyn Mapper>,
 }
 
-impl CartridgeInterface for Cartridge {
-    fn get_name(&self) -> String {
+impl Cartridge {
+    pub fn get_name(&self) -> String {
         self.name.to_owned()
     }
 
-    fn prg_read(&self, addr: u16) -> u8 {
+    pub fn prg_read(&self, addr: u16) -> u8 {
         self.mapper.prg_read(addr)
     }
 
-    fn prg_write(&mut self, addr: u16, val: u8) {
+    pub fn prg_write(&mut self, addr: u16, val: u8) {
         // dpcm_read assumes that these bytes never change. If this happens we have to update how
         // we pass the samples to the APU
         assert!(addr <= 0xC000, "Unexpected write to audio samples");
@@ -42,15 +33,15 @@ impl CartridgeInterface for Cartridge {
         self.mapper.prg_write(addr, val);
     }
 
-    fn header(&self) -> Header {
+    pub fn header(&self) -> Header {
         self.header.clone()
     }
 
-    fn dpcm(&self) -> ROM {
+    pub fn dpcm(&self) -> ROM {
         self.mapper.dpcm()
     }
 
-    fn chr(&self) -> ROM {
+    pub fn chr(&self) -> ROM {
         self.mapper.chr()
     }
 }

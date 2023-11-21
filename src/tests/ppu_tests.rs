@@ -1,10 +1,5 @@
-use sdl2::event::Event;
-use sdl2::keyboard::Keycode;
-use std::time::Duration;
-use venus::cartridge::*;
-use venus::ppu::PPU;
-
 // FIXME: Should write a TestRenderer which we can implement to read/write a binary file of frames
+#[ignore = "disabled"]
 #[test]
 fn donkey_kong() {
     return;
