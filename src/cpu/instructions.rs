@@ -231,7 +231,13 @@ pub struct Instruction {
     opcode: u8,
     name: InstrName,
     mode: AddressingMode,
-    cycles: u8,
+    cycles: usize,
+}
+
+impl Default for Instruction {
+    fn default() -> Self {
+        Instruction::nop()
+    }
 }
 
 impl std::fmt::Display for Instruction {
@@ -260,7 +266,12 @@ impl std::str::FromStr for Instruction {
 }
 
 impl Instruction {
-    pub const fn new(opcode: u8, name: InstrName, mode: AddressingMode, cycles: u8) -> Instruction {
+    pub const fn new(
+        opcode: u8,
+        name: InstrName,
+        mode: AddressingMode,
+        cycles: usize,
+    ) -> Instruction {
         Instruction {
             opcode,
             name,
@@ -290,7 +301,7 @@ impl Instruction {
         &self.name
     }
 
-    pub const fn cycles(&self) -> u8 {
+    pub const fn cycles(&self) -> usize {
         self.cycles
     }
 

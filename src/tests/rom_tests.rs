@@ -4,12 +4,12 @@ use tracing::{event, Level};
 use tracing_subscriber::{fmt, prelude::*, Layer};
 use venus::VNES;
 use venus::{
-    cpu::{instructions::Instruction, CpuInterface, CpuState, CpuStateBuilder},
+    cpu::{instructions::Instruction, CpuInterface, NESSnapshot, SnapshotBuilder},
     ExitStatus,
 };
 
 struct NestestParser {
-    cpu_states: Vec<CpuState>,
+    cpu_states: Vec<NESSnapshot>,
 }
 
 impl NestestParser {
@@ -88,11 +88,11 @@ impl NestestParser {
                 .parse::<i16>()
                 .expect("Scanline not numeric");
 
-            let mut builder = CpuStateBuilder::new()
+            let mut builder = SnapshotBuilder::new()
                 .pc(pc)
                 .instruction(opcode)
                 .operands(args)
-                .cycles(cycles)
+                .total_cycles(cycles)
                 .scanline(scanline)
                 .ppu_cycle(ppu_cycle);
 

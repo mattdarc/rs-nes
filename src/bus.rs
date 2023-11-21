@@ -18,9 +18,6 @@ pub trait Bus {
         let next_addr = (addr & 0xFF00) | ((addr + 1) & 0xFF);
         (self.read(addr) as u16) | ((self.read(next_addr) as u16) << 8)
     }
-    fn read_n(&mut self, addr: u16, n: u16) -> Vec<u8> {
-        (0..n).map(|idx| self.read(addr + idx)).collect::<Vec<_>>()
-    }
     fn cycles(&self) -> usize;
     fn clock(&mut self, cycles: usize);
     fn pop_nmi(&mut self) -> Option<u8>;

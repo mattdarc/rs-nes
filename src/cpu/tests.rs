@@ -7,6 +7,7 @@ const TEST_PROGRAM_START: usize = 0x7FF0;
 
 struct TestBus {
     program: ROM,
+    cycles: usize,
     ram: RAM,
 }
 
@@ -14,6 +15,7 @@ impl TestBus {
     pub fn new(data: &[u8]) -> Self {
         TestBus {
             program: ROM::with_data(data),
+            cycles: 0,
             ram: RAM::with_size(0x800),
         }
     }
@@ -37,10 +39,12 @@ impl Bus for TestBus {
     }
 
     fn cycles(&self) -> usize {
-        0
+        self.cycles
     }
 
-    fn clock(&mut self, _cycles: usize) {}
+    fn clock(&mut self, cycles: usize) {
+        self.cycles += cycles
+    }
 
     fn pop_nmi(&mut self) -> Option<u8> {
         None
@@ -60,24 +64,25 @@ fn initialize_program(data: &[u8]) -> CPU<TestBus> {
     cpu.reset();
 
     // Default status is not empty, but we make it such for ease in the following tests
-    cpu.status = Status::empty();
+    cpu.state.status = Status::empty();
     cpu
 }
 
 macro_rules! verify_op {
     ($name:ident, $addr_mode:ident, $opcode:literal, $($($operands:literal)*,)*
      [$($addr:literal=$val:literal),*]{$($reg:ident : $pv:expr),*} => [$($exp_addr:literal = $exp_b:expr),*]{$($eflg:ident : $ev:expr),*}) => {
+        {
 	let act_instr = instructions::decode_instruction(($opcode).into());
 	assert_eq!(act_instr.name(), &$name, "Instruction mismatch for {:?}", &$name);
 	assert_eq!(act_instr.mode(), &$addr_mode, "Address mode mismatch for {:?}", &$addr_mode);
 
 	// Set up initial CPU state
     let mut cpu = initialize_program(&[$opcode, $($($operands,)*)*]);
-	$(cpu.$reg = $pv;)*
-	$(cpu.bus.write($addr, $val);)*
+	$(cpu.state.$reg = $pv;)*
+	$(cpu.interpreter.bus.write($addr, $val);)*
 
 	// Init and keep track of PC
-	let pc_bef = cpu.pc;
+	let pc_bef = cpu.state.pc;
 
 	// Make sure we run for the correct number cycles
 	cpu.clock();
@@ -85,15 +90,18 @@ macro_rules! verify_op {
 	// Verify CPU state
 	if !instructions::is_branch(&$name) {
         // Branch instructions will jump to an arbitrary PC, validated by the test itself
-        assert_eq!(cpu.pc - pc_bef, act_instr.size(), "PC did not retrieve the correct number of bytes");
+        assert_eq!(cpu.state.pc - pc_bef, act_instr.size(), "PC did not retrieve the correct number of bytes");
 
         // Similarly the cycle count wwill be validated as some branch instructions have cycle
         // penalties
-	    assert_eq!(cpu.cycles, act_instr.cycles());
+	    assert_eq!(cpu.interpreter.bus.cycles(), act_instr.cycles(), "Cycle mismatch");
     }
 
-	$(assert_eq!(cpu.$eflg, $ev, "Flag mismatch $eflg");)*
-	$(assert_eq!(cpu.bus.read($exp_addr), $exp_b, "Memory at {:#X} does not match {:#}", $exp_addr, $exp_b);)*
+	$(assert_eq!(cpu.state.$eflg, $ev, "Mismatch for '{}'", stringify!($eflg));)*
+	$(assert_eq!(cpu.interpreter.bus.read($exp_addr), $exp_b, "Memory at {:#X} does not match {:#}", $exp_addr, $exp_b);)*
+
+    cpu.interpreter.bus.cycles()
+    }
     }
 }
 
@@ -156,26 +164,40 @@ fn bit() {
 
 #[test]
 fn branches() {
-    verify_op!(BCS, Relative, 0xB0, 0x10, []{status: Status::empty()} => []{cycles: 2, pc: TEST_PROGRAM_START as u16 + 0x2});
-    verify_op!(BCS, Relative, 0xB0, 0x7F, []{status: Status::CARRY} =>   []{cycles: 4, pc: TEST_PROGRAM_START as u16 + 0x81});
+    let cycles = verify_op!(BCS, Relative, 0xB0, 0x10, []{status: Status::empty()} => []{pc: TEST_PROGRAM_START as u16 + 0x2});
+    assert_eq!(cycles, 2);
+    let cycles = verify_op!(BCS, Relative, 0xB0, 0x7F, []{status: Status::CARRY} =>   []{pc: TEST_PROGRAM_START as u16 + 0x81});
+    assert_eq!(cycles, 4);
 
-    verify_op!(BEQ, Relative, 0xF0, 0x10, []{status: Status::empty()} => []{cycles: 2, pc: TEST_PROGRAM_START as u16 + 0x2});
-    verify_op!(BEQ, Relative, 0xF0, 0x7F, []{status: Status::ZERO} =>    []{cycles: 4, pc: TEST_PROGRAM_START as u16 + 0x81});
+    let cycles = verify_op!(BEQ, Relative, 0xF0, 0x10, []{status: Status::empty()} => []{pc: TEST_PROGRAM_START as u16 + 0x2});
+    assert_eq!(cycles, 2);
+    let cycles = verify_op!(BEQ, Relative, 0xF0, 0x7F, []{status: Status::ZERO} =>    []{pc: TEST_PROGRAM_START as u16 + 0x81});
+    assert_eq!(cycles, 4);
 
-    verify_op!(BMI, Relative, 0x30, 0x10, []{status: Status::empty()} =>  []{cycles: 2, pc: TEST_PROGRAM_START as u16 + 0x2});
-    verify_op!(BMI, Relative, 0x30, 0x7F, []{status: Status::NEGATIVE} => []{cycles: 4, pc: TEST_PROGRAM_START as u16 + 0x81});
+    let cycles = verify_op!(BMI, Relative, 0x30, 0x10, []{status: Status::empty()} =>  []{pc: TEST_PROGRAM_START as u16 + 0x2});
+    assert_eq!(cycles, 2);
+    let cycles = verify_op!(BMI, Relative, 0x30, 0x7F, []{status: Status::NEGATIVE} => []{pc: TEST_PROGRAM_START as u16 + 0x81});
+    assert_eq!(cycles, 4);
 
-    verify_op!(BNE, Relative, 0xD0, 0x10, []{status: Status::ZERO} =>    []{cycles: 2, pc: TEST_PROGRAM_START as u16 + 0x2});
-    verify_op!(BNE, Relative, 0xD0, 0x7F, []{status: Status::empty()} => []{cycles: 4, pc: TEST_PROGRAM_START as u16 + 0x81});
+    let cycles = verify_op!(BNE, Relative, 0xD0, 0x10, []{status: Status::ZERO} =>    []{pc: TEST_PROGRAM_START as u16 + 0x2});
+    assert_eq!(cycles, 2);
+    let cycles = verify_op!(BNE, Relative, 0xD0, 0x7F, []{status: Status::empty()} => []{pc: TEST_PROGRAM_START as u16 + 0x81});
+    assert_eq!(cycles, 4);
 
-    verify_op!(BPL, Relative, 0x10, 0x10, []{status: Status::NEGATIVE} => []{cycles: 2, pc: TEST_PROGRAM_START as u16 + 0x2});
-    verify_op!(BPL, Relative, 0x10, 0x1, []{status: Status::empty()} =>  []{cycles: 3, pc: TEST_PROGRAM_START as u16 + 0x3});
+    let cycles = verify_op!(BPL, Relative, 0x10, 0x10, []{status: Status::NEGATIVE} => []{pc: TEST_PROGRAM_START as u16 + 0x2});
+    assert_eq!(cycles, 2);
+    let cycles = verify_op!(BPL, Relative, 0x10, 0x1, []{status: Status::empty()} =>  []{pc: TEST_PROGRAM_START as u16 + 0x3});
+    assert_eq!(cycles, 3);
 
-    verify_op!(BVC, Relative, 0x50, 0x10, []{status: Status::OVERFLOW} => []{cycles: 2, pc: TEST_PROGRAM_START as u16 + 0x2});
-    verify_op!(BVC, Relative, 0x50, 0x1, []{status: Status::empty()} =>  []{cycles: 3, pc: TEST_PROGRAM_START as u16 + 0x3});
+    let cycles = verify_op!(BVC, Relative, 0x50, 0x10, []{status: Status::OVERFLOW} => []{pc: TEST_PROGRAM_START as u16 + 0x2});
+    assert_eq!(cycles, 2);
+    let cycles = verify_op!(BVC, Relative, 0x50, 0x1, []{status: Status::empty()} =>  []{pc: TEST_PROGRAM_START as u16 + 0x3});
+    assert_eq!(cycles, 3);
 
-    verify_op!(BVS, Relative, 0x70, 0x10, []{status: Status::empty()} =>  []{cycles: 2, pc: TEST_PROGRAM_START as u16 + 0x2});
-    verify_op!(BVS, Relative, 0x70, 0x1, []{status: Status::OVERFLOW} => []{cycles: 3, pc: TEST_PROGRAM_START as u16 + 0x3});
+    let cycles = verify_op!(BVS, Relative, 0x70, 0x10, []{status: Status::empty()} =>  []{pc: TEST_PROGRAM_START as u16 + 0x2});
+    assert_eq!(cycles, 2);
+    let cycles = verify_op!(BVS, Relative, 0x70, 0x1, []{status: Status::OVERFLOW} => []{pc: TEST_PROGRAM_START as u16 + 0x3});
+    assert_eq!(cycles, 3);
 }
 
 #[test]
