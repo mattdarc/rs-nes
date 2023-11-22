@@ -8,8 +8,8 @@ use crate::memory::{RAM, ROM};
 use crate::timer;
 use crate::{NES_FRAME_HEIGHT_PX, NES_FRAME_WIDTH_PX};
 use registers::*;
-use sprite::Sprite;
-use std::collections::VecDeque;
+use sprite::{Sprite, SpriteRaw};
+use std::convert::TryFrom;
 use tracing::{event, Level};
 
 // FIXME: Need to fix up these types a bit
@@ -20,18 +20,18 @@ const VISIBLE_CYCLES: usize = 257;
 const CYCLES_PER_TILE: usize = 8;
 const STARTUP_SCANLINES: usize = 30_000 / CYCLES_PER_SCANLINE;
 
-const PX_SIZE_BYTES: usize = 4; // 4th byte for the pixel is unused
-
 const TILE_HI_OFFSET_BYTES: u16 = 8;
 const TILE_STRIDE_SHIFT: u16 = 4;
+
+const PX_SIZE_BYTES: usize = 4; // 4th byte for the pixel is unused
 const TILE_WIDTH_PX: usize = 8;
 const TILE_HEIGHT_PX: usize = 8;
 const TILE_SIZE_BYTES: usize = 16;
-
 const FRAME_NUM_TILES: usize = FRAME_WIDTH_TILES * FRAME_HEIGHT_TILES;
 const FRAME_WIDTH_TILES: usize = NES_FRAME_WIDTH_PX / TILE_WIDTH_PX;
 const FRAME_HEIGHT_TILES: usize = NES_FRAME_HEIGHT_PX / TILE_HEIGHT_PX;
-const FRAME_SIZE_BYTES: usize = PX_SIZE_BYTES * NES_FRAME_HEIGHT_PX * NES_FRAME_WIDTH_PX;
+const FRAME_SIZE: usize = NES_FRAME_HEIGHT_PX * NES_FRAME_WIDTH_PX;
+const FRAME_SIZE_BYTES: usize = PX_SIZE_BYTES * FRAME_SIZE;
 
 const PALETTE_COLOR_LUT: [u32; 64] = [
     0x7C7C7C, 0x0000FC, 0x0000BC, 0x4428BC, 0x940084, 0xA80020, 0xA81000, 0x881400, 0x503000,
@@ -59,22 +59,50 @@ struct Tile {
     pattern_hi: u8,
 }
 
+const MAX_SPRITES: usize = 8;
+
 struct OamSecondary {
-    sprites: Vec<Sprite>,
+    sprites: [Sprite; MAX_SPRITES],
     has_sprite_0: bool,
+    len: usize,
 }
 
 impl Default for OamSecondary {
     fn default() -> Self {
         OamSecondary {
-            sprites: Vec::new(),
+            sprites: Default::default(),
             has_sprite_0: false,
+            len: 0,
         }
     }
 }
 
+impl OamSecondary {
+    pub fn len(&self) -> usize {
+        self.len
+    }
+
+    pub fn add_potential_sprite(&mut self, bytes: &SpriteRaw) {
+        self.sprites[self.len] = Sprite::from(bytes);
+    }
+
+    pub fn get_potential_sprite(&self) -> &Sprite {
+        assert!(self.len < MAX_SPRITES);
+        &self.sprites[self.len]
+    }
+
+    pub fn commit(&mut self) {
+        assert!(self.len < MAX_SPRITES);
+        self.len += 1;
+    }
+
+    pub fn sprites(&self) -> &[Sprite] {
+        &self.sprites[0..self.len]
+    }
+}
+
 pub struct PPU {
-    frame_buf: Vec<u8>,
+    frame_buf: [u32; FRAME_SIZE],
 
     cartridge_header: Header,
     cartridge_chr: ROM,
@@ -96,9 +124,8 @@ pub struct PPU {
     scanline: i16,
     frame: usize,
 
-    // Background
-    tile_q: VecDeque<Tile>,
-
+    // Background. Tiles are fetched 2 tiles in advance
+    tile_q: [Tile; 3],
     palette_table: [u8; 32],
 
     needs_render: bool,
@@ -153,13 +180,8 @@ impl PPU {
         let cartridge_header = cartridge.header();
         let cartridge_chr = cartridge.chr();
 
-        let mut tile_q = VecDeque::with_capacity(3);
-        tile_q.push_back(Tile::default());
-        tile_q.push_back(Tile::default());
-        tile_q.push_back(Tile::default());
-
         PPU {
-            frame_buf: vec![0_u8; FRAME_SIZE_BYTES],
+            frame_buf: [0_u32; FRAME_SIZE_BYTES / PX_SIZE_BYTES],
             cartridge_chr,
             cartridge_header,
             palette_table: [0; 32],
@@ -173,7 +195,7 @@ impl PPU {
             ppu_cycle: 0,
             scanline: -1,
             frame: 0,
-            tile_q,
+            tile_q: Default::default(),
             ppudata_buffer: 0,
             vram: RAM::with_size(PPU_VRAM_SIZE),
 
@@ -455,23 +477,17 @@ impl PPU {
 
     fn back_tile_mut(&mut self) -> &mut Tile {
         assert!(self.tile_q.len() == 3);
-        self.tile_q
-            .back_mut()
-            .expect("tile_q should always be of size 3")
+        self.tile_q.last_mut().unwrap()
     }
 
     fn back_tile(&self) -> &Tile {
         assert!(self.tile_q.len() == 3);
-        self.tile_q
-            .back()
-            .expect("tile_q should always be of size 3")
+        self.tile_q.last().unwrap()
     }
 
     fn front_tile(&self) -> &Tile {
         assert!(self.tile_q.len() == 3);
-        self.tile_q
-            .front()
-            .expect("tile_q should always be of size 3")
+        self.tile_q.first().unwrap()
     }
 
     fn do_nametable_fetch(&mut self) {
@@ -935,19 +951,24 @@ impl PPU {
 
         const NUM_SPRITES: usize = 64;
         for n in 0..NUM_SPRITES {
-            // Process the sprite in the primary OAM at this location. If it is in the range of the
-            // next scanline being rendered, copy it to the second OAM to be rendered
-            let sprite_range = (4 * n)..((4 * n) + 4);
-            let sprite = Sprite::from(&self.oam_primary[sprite_range]);
-            if !self.sprite_hit_next_scanline(&sprite) {
-                continue;
-            }
+            if self.oam_secondary.len() >= MAX_SPRITES {
+                assert!(self.oam_secondary.len() == MAX_SPRITES);
 
-            if self.oam_secondary.sprites.len() >= 8 {
                 // Sprite found but all of them are already set. Set the overflow flag without
                 // adding the sprite to be rendered
                 self.registers.status |= PpuStatus::SPRITE_OVERFLOW;
-                return;
+                break;
+            }
+
+            // Process the sprite in the primary OAM at this location. If it is in the range of the
+            // next scanline being rendered, copy it to the second OAM to be rendered
+            let sprite_range = (4 * n)..((4 * n) + 4);
+            let sprite_raw = <&SpriteRaw>::try_from(&self.oam_primary[sprite_range]).unwrap();
+            self.oam_secondary.add_potential_sprite(sprite_raw);
+
+            let sprite = self.oam_secondary.get_potential_sprite();
+            if !self.sprite_hit_next_scanline(&sprite) {
+                continue;
             }
 
             // This is sprite 0 in the OAM
@@ -955,8 +976,8 @@ impl PPU {
                 self.oam_secondary.has_sprite_0 = true;
             }
 
-            // Success: fouund a sprite we can actually push
-            self.oam_secondary.sprites.push(sprite);
+            // Success: fouund a sprite we can actually update the count
+            self.oam_secondary.commit();
         }
     }
 
@@ -977,8 +998,10 @@ impl PPU {
     fn draw_sprites(&mut self) {
         assert!(self.is_visible_cycle());
         assert!(
-            self.oam_secondary.sprites.len() < 9,
-            "The NES can only draw 8 sprites"
+            self.oam_secondary.len() <= MAX_SPRITES,
+            "The NES can only draw {} sprites (tried {})",
+            MAX_SPRITES,
+            self.oam_secondary.len(),
         );
 
         // This must happen when the PPU is drawing the picture, as this is the next scanline from
@@ -993,7 +1016,7 @@ impl PPU {
         std::mem::swap(&mut sprite_queue, &mut self.oam_secondary);
 
         // Sprites with a lower index are drawn in front, reverse the vec
-        for sprite in sprite_queue.sprites.iter().rev() {
+        for sprite in sprite_queue.sprites().iter().rev() {
             if !sprite.is_visible() {
                 continue;
             }
@@ -1037,12 +1060,9 @@ impl PPU {
         let color_idx = self.palette_read(palette_addr as u16);
         let color = PALETTE_COLOR_LUT[color_idx as usize];
 
-        let buf_addr = PX_SIZE_BYTES * (base + px);
-        let render_slice = &mut self.frame_buf[buf_addr..(buf_addr + PX_SIZE_BYTES)];
-
-        let color_slice = &to_u8_slice(color);
-        self.needs_render = self.needs_render || color_slice != render_slice;
-        render_slice.copy_from_slice(color_slice);
+        let buf_addr = base + px;
+        self.needs_render = self.needs_render || self.frame_buf[buf_addr] != color;
+        self.frame_buf[buf_addr] = color;
     }
 
     fn render_frame(&mut self) {
@@ -1050,8 +1070,9 @@ impl PPU {
             return;
         }
 
+        let frame_bytes: [u8; FRAME_SIZE_BYTES] = unsafe { std::mem::transmute(self.frame_buf) };
         self.needs_render = false;
-        self.renderer.draw_frame(&self.frame_buf);
+        self.renderer.draw_frame(&frame_bytes);
         self.renderer.present();
     }
 }

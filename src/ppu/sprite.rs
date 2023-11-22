@@ -6,40 +6,32 @@ pub enum Priority {
 
 #[derive(Clone, Copy)]
 pub struct Sprite {
-    x: u8,
-    y: u8,
-    palette_num: u8,
-    priority: Priority,
-    vert_flip: bool,
-    horiz_flip: bool,
+    bytes: SpriteRaw,
+}
 
-    bytes: [u8; 4],
+pub type SpriteRaw = [u8; Sprite::BYTES_PER];
+
+impl Default for Sprite {
+    fn default() -> Self {
+        // Reading from an uninitialized OAM secondary will return 0xFF
+        Sprite::from(&[0xFF_u8; Sprite::BYTES_PER])
+    }
 }
 
 impl Sprite {
     pub const BYTES_PER: usize = 4;
     pub const PIX_HEIGHT: u8 = 8;
 
-    pub fn default() -> Self {
-        // Reading from an uninitialized OAM secondary will return 0xFF
-        Sprite::from([0xFF_u8; Sprite::BYTES_PER].as_slice())
-    }
-
-    pub fn raw(&self) -> &[u8] {
-        assert!(self.bytes.len() == 4, "Sprites should be 4 bytes in size!");
-        self.bytes.as_slice()
-    }
-
     pub fn is_valid(&self) -> bool {
         self.bytes != [0xFF; 4]
     }
 
     pub fn x(&self) -> i16 {
-        self.x as i16
+        self.bytes[3] as i16
     }
 
     pub fn y(&self) -> i16 {
-        self.y as i16
+        self.bytes[0] as i16
     }
 
     pub fn tile16(&self) -> (u16, u16) {
@@ -57,49 +49,34 @@ impl Sprite {
     }
 
     pub fn color_d3_d2(&self) -> u8 {
-        self.palette_num
+        self.bytes[2] & 0x3
     }
 
     pub fn vert_flip(&self) -> bool {
-        self.vert_flip
+        self.bytes[2] & 0x80 != 0
     }
 
     pub fn horiz_flip(&self) -> bool {
-        self.horiz_flip
+        self.bytes[2] & 0x40 != 0
     }
 
     pub fn is_visible(&self) -> bool {
-        self.priority == Priority::Foreground
-    }
-}
-
-impl std::convert::From<&[u8]> for Sprite {
-    fn from(bytes: &[u8]) -> Sprite {
-        assert!(bytes.len() == Sprite::BYTES_PER);
-        let x = bytes[3];
-        let y = bytes[0];
-        let palette_num = bytes[2] & 0x3;
-
-        let priority = if bytes[2] & 0x20 != 0 {
+        let priority = if self.bytes[2] & 0x20 != 0 {
             Priority::Background
         } else {
             Priority::Foreground
         };
-        let horiz_flip = bytes[2] & 0x40 != 0;
-        let vert_flip = bytes[2] & 0x80 != 0;
-        let mut bytes_arr = [0; 4];
-        for i in 0..4 {
-            bytes_arr[i] = bytes[i];
-        }
-        Sprite {
-            x,
-            y,
-            palette_num,
-            priority,
-            vert_flip,
-            horiz_flip,
 
-            bytes: bytes_arr,
+        priority == Priority::Foreground
+    }
+}
+
+impl std::convert::From<&[u8; 4]> for Sprite {
+    fn from(bytes: &[u8; 4]) -> Sprite {
+        assert!(bytes.len() == Sprite::BYTES_PER);
+
+        Sprite {
+            bytes: bytes.clone(),
         }
     }
 }
