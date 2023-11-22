@@ -1,4 +1,3 @@
-mod flags;
 mod registers;
 mod sprite;
 
@@ -8,7 +7,6 @@ use crate::graphics::Renderer;
 use crate::memory::{RAM, ROM};
 use crate::timer;
 use crate::{NES_FRAME_HEIGHT_PX, NES_FRAME_WIDTH_PX};
-use flags::*;
 use registers::*;
 use sprite::Sprite;
 use std::collections::VecDeque;
@@ -45,6 +43,12 @@ const PALETTE_COLOR_LUT: [u32; 64] = [
     0xF0D0B0, 0xFCE0A8, 0xF8D878, 0xD8F878, 0xB8F8B8, 0xB8F8D8, 0x00FCFC, 0xF8D8F8, 0x000000,
     0x000000,
 ];
+
+#[derive(Default)]
+pub struct Flags {
+    pub odd: bool,
+    pub has_nmi: bool,
+}
 
 #[derive(Default)]
 struct Tile {
