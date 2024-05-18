@@ -585,23 +585,13 @@ impl PPU {
         }
     }
 
-    fn do_tile_fetches(&mut self) {
-        if self.ppu_cycle == 0 || (257 <= self.ppu_cycle && self.ppu_cycle < 320) {
-            // No fetches happen here
-            return;
+    fn do_tile_fetches_if_needed(&mut self) -> bool {
+        if self.is_blanking() {
+            return false;
         }
 
-        if self.ppu_cycle > 336 {
-            // Fetches after this cycle are special and fetch two garbage nametables. Doesn't seem
-            // to be needed for now
-            // https://www.nesdev.org/wiki/PPU_rendering#Pre-render_scanline_(-1_or_261)
-            return;
-        }
-
-        if (self.ppu_cycle - 1) % 8 != 0 {
-            // Real HW does the fetches throughout these cycles but we just batch them together.
-            // This method considerably improves performance of the fetches
-            return;
+        if ((self.ppu_cycle - 1) % TILE_WIDTH_PX as i16) != 0 {
+            return false;
         }
 
         // A possible performance improvement would be to pre-allocate a scanline-size buffer
@@ -614,27 +604,31 @@ impl PPU {
             self.do_attribute_fetch();
             self.do_pattern_fetch();
         });
+
+        return true;
     }
 
-    fn tick_once(&mut self) {
-        if !self.is_blanking() {
-            self.do_tile_fetches();
-        }
+    // Returns the number of cycles until the next transition
+    // fn handle_transition(&mut self, new_state: PpuState) -> i16 {}
 
+    fn tick_once(&mut self) {
         // https://www.nesdev.org/wiki/PPU_rendering
         match (self.scanline, self.ppu_cycle) {
             (-1, 1) => timer::timed!("ppu::clear flags", { self.do_start_frame() }),
-            (-1, _) => { /* dummy scanline */ }
+            (-1, _) => timer::timed!("ppu::nop", { /* dummy scanline */ }),
 
             // Visible scanlines (0-239)
             (0..240, 0) => { /* idle cycle */ }
             (0..240, (1..256)) => {
-                if ((self.ppu_cycle - 1) % TILE_WIDTH_PX as i16) == 0 {
+                let fetched = self.do_tile_fetches_if_needed();
+                if fetched {
                     // Render one tile at a time. This is how frequently the real hardware is
                     // updated. A possible cycle-accurate improvement would be to do this fetch
                     // every 8 cycles but write the pixels every cycle. Not sure if we actually
                     // need to do this to get a workable game.
                     timer::timed!("ppu::draw background", { self.draw_background() });
+                } else {
+                    timer::timed!("ppu::nop", {});
                 }
             }
             // Draw sprites once on the last visible cycle so they're over the background
@@ -644,13 +638,18 @@ impl PPU {
                     self.evaluate_sprites_next_scanline()
                 })
             }
-            (0..240, 258..321) => { /* HW evaluating sprites */ }
-            (0..240, 321..342) => { /* garbage nametable fetches */ }
+            (0..240, 258..321) => timer::timed!("ppu::nop", { /* HW evaluating sprites */ }),
+            (0..240, 321..337) => {
+                self.do_tile_fetches_if_needed();
+            }
+            (0..240, 337..342) => timer::timed!("ppu::nop", { /* garbage nametable fetches */ }),
 
-            (240, _) => { /* idle scanline */ }
+            (240, _) => timer::timed!("ppu::nop", { /* idle scanline */ }),
 
             (241, 1) => timer::timed!("ppu::vblank", { self.do_start_vblank() }),
-            (241..261, _) => { /* PPU should make no memory accesses */ }
+            (241..261, _) => {
+                timer::timed!("ppu::nop", { /* PPU should make no memory accesses */ })
+            }
 
             (scanline, cycle) => unreachable!("scanline={}, cycle={}", scanline, cycle),
         }

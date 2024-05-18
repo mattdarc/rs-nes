@@ -58,7 +58,7 @@ impl FastInstant {
 }
 
 // Registry of time results across the whole program. These are written to disk or printed on
-// thread exit, since we do not to do this while anything is running
+// thread exit, since we do not want to do this while anything is running
 struct TimeResultRegistry {
     global_start: FastInstant,
     results: HashMap<&'static str, Vec<TimeResultRef>>,
@@ -152,7 +152,7 @@ impl TimeResultRegistry {
                     name,
                     times.iter().fold((Duration::default(), 0), |a, b| {
                         // Acquire load here means any corresponding timer duration on another
-                        // thread will be visible if the sample count was incrementedA
+                        // thread will be visible if the sample count was incremented
                         let samples = b.samples.load(Ordering::Acquire);
                         let duration = unsafe { *b.total_duration.get() };
                         (a.0 + duration, a.1 + samples)
