@@ -6,7 +6,8 @@ use sdl2::rect::Rect;
 use sdl2::render::{Texture, WindowCanvas};
 use sdl2::video::DisplayMode;
 use std::mem::MaybeUninit;
-use std::sync::Once;
+use std::sync::{mpsc, Once};
+use std::thread;
 
 static INIT_SDL: Once = Once::new();
 static mut SDL_CONTEXT: MaybeUninit<sdl2::Sdl> = MaybeUninit::uninit();
@@ -23,35 +24,25 @@ impl SDL2Intrf {
     }
 }
 
-pub struct SDLRenderer<'a> {
+/// The raw pointers here are safe because both the renderer and the buffers are owned by the PPU
+enum RenderRequest {
+    Stop,
+    DrawLine(*const u8, usize, u32),
+    DrawFrame(*const u8, usize),
+}
+
+unsafe impl Send for RenderRequest {}
+
+struct SDLBackend<'a> {
     canvas: WindowCanvas,
     texture: Texture<'a>,
     width_px: usize,
     height_px: usize,
 }
 
-impl SDLRenderer<'_> {
-    pub fn new(width: usize, height: usize) -> Self {
-        let canvas = SDLRenderer::init_canvas();
-        // FIXME: Ideally we wouldn't need to leak but I can't get the lifetime right here...
-        // Since we create only one of these it should be fine
-        let tex_creator = Box::leak(Box::new(canvas.texture_creator()));
-        let texture = tex_creator
-            .create_texture_target(None, width as u32, height as u32)
-            .unwrap();
+unsafe impl Send for SDLBackend<'_> {}
 
-        SDLRenderer {
-            canvas,
-            texture,
-            width_px: width,
-            height_px: height,
-        }
-    }
-
-    fn get_canvas(&mut self) -> &mut WindowCanvas {
-        &mut self.canvas
-    }
-
+impl SDLBackend<'_> {
     fn init_canvas() -> WindowCanvas {
         let sdl_ctx = SDL2Intrf::context();
         let video_subsystem = sdl_ctx.video().unwrap();
@@ -76,9 +67,7 @@ impl SDLRenderer<'_> {
 
         canvas
     }
-}
 
-impl Renderer for SDLRenderer<'_> {
     fn draw_line(&mut self, scanline: &[u8], row: u32) {
         timer::timed!("render::draw", {
             assert_eq!(
@@ -110,19 +99,84 @@ impl Renderer for SDLRenderer<'_> {
         let pitch_bytes: usize = PX_SIZE_BYTES as usize * self.width_px;
         assert_eq!(buf.len(), pitch_bytes * self.height_px);
 
-        timer::timed!("render::draw", {
-            self.texture.update(None, &buf, pitch_bytes).unwrap();
-            self.canvas.copy(&self.texture, None, None).unwrap();
+        timer::timed!("renderer::update", {
+            self.texture.update(None, &buf, pitch_bytes).unwrap()
         });
+        timer::timed!("renderer::update", {
+            self.canvas.copy(&self.texture, None, None).unwrap()
+        });
+        timer::timed!("renderer::present", { self.canvas.present() });
     }
 
-    fn present(&mut self) {
-        timer::timed!("render::present", { self.canvas.present() });
+    fn present(&mut self) {}
+}
+
+pub struct SDLRenderer {
+    sender: mpsc::SyncSender<RenderRequest>,
+    render_thread: thread::JoinHandle<()>,
+}
+
+impl SDLRenderer {
+    pub fn new(width: usize, height: usize) -> Self {
+        let canvas = SDLBackend::init_canvas();
+
+        // FIXME: Ideally we wouldn't need to leak but I can't get the lifetime right here...
+        // Since we create only one of these it should be fine
+        let tex_creator = Box::leak(Box::new(canvas.texture_creator()));
+        let texture = tex_creator
+            .create_texture_target(None, width as u32, height as u32)
+            .unwrap();
+
+        let mut backend = SDLBackend {
+            canvas,
+            texture,
+            width_px: width,
+            height_px: height,
+        };
+
+        // Use a bound of 1 so we can only have one frame being drawn at a time
+        let (sender, receiver) = mpsc::sync_channel(1);
+        let render_thread = thread::spawn(move || loop {
+            match receiver.recv().expect("Error receiving render requests") {
+                RenderRequest::Stop => return,
+                RenderRequest::DrawFrame(buffer, size) => {
+                    backend.draw_frame(unsafe { std::slice::from_raw_parts(buffer, size) })
+                }
+                RenderRequest::DrawLine(buffer, size, row) => {
+                    backend.draw_line(unsafe { std::slice::from_raw_parts(buffer, size) }, row)
+                }
+            }
+        });
+
+        SDLRenderer {
+            sender,
+            render_thread,
+        }
     }
 }
 
-impl Clone for SDLRenderer<'_> {
-    fn clone(&self) -> Self {
-        SDLRenderer::new(self.width_px, self.height_px)
+impl Renderer for SDLRenderer {
+    fn draw_line(&mut self, scanline: &[u8], row: u32) {
+        self.sender
+            .send(RenderRequest::DrawLine(
+                scanline.as_ptr(),
+                scanline.len(),
+                row,
+            ))
+            .unwrap();
+    }
+
+    /// Display a buffer buf on the screen. The format of the buffer is assumed to be in the RGB888
+    /// format
+    fn draw_frame(&mut self, buf: &[u8]) {
+        self.sender
+            .send(RenderRequest::DrawFrame(buf.as_ptr(), buf.len()))
+            .unwrap();
+    }
+}
+
+impl Drop for SDLRenderer {
+    fn drop(&mut self) {
+        self.sender.send(RenderRequest::Stop).unwrap();
     }
 }

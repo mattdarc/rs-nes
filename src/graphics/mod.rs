@@ -20,7 +20,6 @@ pub mod constants {
 pub trait Renderer {
     fn draw_line(&mut self, line: &[u8], row: u32);
     fn draw_frame(&mut self, buf: &[u8]);
-    fn present(&mut self) {}
 }
 
 fn dump_texture_buf(buf: &[u8], px_size: usize) {

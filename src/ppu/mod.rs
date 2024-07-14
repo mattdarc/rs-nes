@@ -115,10 +115,47 @@ enum PpuState {
     EOF,
 }
 
+// A simple tripple-buffered frame buffer so the PPU can draw safely while offloading rendering to
+// another thread
+struct FrameBuffer {
+    buffers: [[u32; FRAME_SIZE]; 3],
+    index: usize,
+}
+
+impl std::ops::Index<usize> for FrameBuffer {
+    type Output = u32;
+    fn index(&self, i: usize) -> &u32 {
+        &self.buffers[self.index][i]
+    }
+}
+
+impl std::ops::IndexMut<usize> for FrameBuffer {
+    fn index_mut(&mut self, i: usize) -> &mut u32 {
+        &mut self.buffers[self.index][i]
+    }
+}
+
+impl FrameBuffer {
+    fn new() -> Self {
+        Self {
+            buffers: [[0_u32; FRAME_SIZE_BYTES / PX_SIZE_BYTES]; 3],
+            index: 0,
+        }
+    }
+
+    fn swap(&mut self) {
+        self.index = (self.index + 1) % 3;
+    }
+
+    fn to_bytes(&self) -> &[u8; FRAME_SIZE_BYTES] {
+        unsafe { std::mem::transmute(&self.buffers[self.index]) }
+    }
+}
+
 type TransitionLUT = [i32; std::mem::variant_count::<PpuState>()];
 
 pub struct PPU {
-    frame_buf: [u32; FRAME_SIZE],
+    frame_buf: FrameBuffer,
 
     cartridge_header: Header,
     cartridge_chr: ROM,
@@ -199,7 +236,7 @@ impl PPU {
         let cartridge_chr = cartridge.chr();
 
         PPU {
-            frame_buf: [0_u32; FRAME_SIZE_BYTES / PX_SIZE_BYTES],
+            frame_buf: FrameBuffer::new(),
             cartridge_chr,
             cartridge_header,
             palette_table: [0; 32],
@@ -493,12 +530,6 @@ impl PPU {
         let forced_blank = !self.rendering_enabled();
         let in_vblank = self.scanline > VISIBLE_SCANLINES as i32;
         forced_blank || in_vblank
-    }
-
-    fn clear_render_buffer(&mut self) {
-        for i in 0..self.frame_buf.len() {
-            self.frame_buf[i] = 0;
-        }
     }
 
     fn back_tile_mut(&mut self) -> &mut Tile {
@@ -1162,11 +1193,11 @@ impl PPU {
             return;
         }
 
-        let frame_bytes: [u8; FRAME_SIZE_BYTES] = unsafe { std::mem::transmute(self.frame_buf) };
         self.needs_render = false;
         timer::timed!("ppu::render frame", {
-            self.renderer.draw_frame(&frame_bytes);
-            self.renderer.present();
+            self.renderer
+                .draw_frame(self.frame_buf.to_bytes().as_slice());
+            self.frame_buf.swap();
         });
     }
 }
