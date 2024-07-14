@@ -1,4 +1,5 @@
 #![allow(dead_code)]
+#![feature(variant_count)]
 
 extern crate sdl2;
 

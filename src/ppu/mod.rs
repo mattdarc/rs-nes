@@ -13,10 +13,11 @@ use std::convert::TryFrom;
 use tracing::{event, Level};
 
 // FIXME: Need to fix up these types a bit
-const SCANLINES_PER_FRAME: usize = 260;
+const SCANLINES_PER_FRAME: usize = 262;
+const LAST_SCANLINE: usize = 260;
 const VISIBLE_SCANLINES: usize = 240;
 const CYCLES_PER_SCANLINE: usize = 341;
-const VISIBLE_CYCLES: usize = 257;
+const VISIBLE_CYCLES: usize = 258;
 const CYCLES_PER_TILE: usize = 8;
 const STARTUP_SCANLINES: usize = 30_000 / CYCLES_PER_SCANLINE;
 
@@ -101,6 +102,22 @@ impl OamSecondary {
     }
 }
 
+#[derive(Debug, PartialEq, Eq, Clone, Copy)]
+enum PpuState {
+    Idle,
+    StartFrame,
+    SyncY,
+    ActiveTileFetch,
+    DrawAndEvalSprites,
+    BlankingTileFetch,
+    StartHBlank, // Not a real state, used to satisfy transition requirement
+    IdleScanline,
+    StartVBlank,
+    EOF,
+}
+
+type TransitionLUT = [i32; std::mem::variant_count::<PpuState>()];
+
 pub struct PPU {
     frame_buf: [u32; FRAME_SIZE],
 
@@ -123,6 +140,8 @@ pub struct PPU {
     ppu_cycle: i16,
     scanline: i16,
     frame: usize,
+    current_state: PpuState,
+    transition_lut: TransitionLUT,
 
     // Background. Tiles are fetched 2 tiles in advance
     tile_q: [Tile; 3],
@@ -195,6 +214,9 @@ impl PPU {
             ppu_cycle: 0,
             scanline: -1,
             frame: 0,
+            current_state: PpuState::Idle,
+            transition_lut: Self::create_transition_lut(),
+
             tile_q: Default::default(),
             ppudata_buffer: 0,
             vram: RAM::with_size(PPU_VRAM_SIZE),
@@ -439,14 +461,21 @@ impl PPU {
         }
     }
 
+    fn do_sync_y(&mut self) {
+        if !self.is_blanking() {
+            self.registers.addr.sync_y()
+        }
+    }
+
     fn do_start_frame(&mut self) {
-        self.registers.status &= !PpuStatus::SPRITE_0_HIT;
-        self.registers.status &= !PpuStatus::VBLANK_STARTED;
-        self.registers.status &= !PpuStatus::SPRITE_OVERFLOW;
+        timer::timed!("ppu::start frame", {
+            self.registers.status &= !PpuStatus::SPRITE_0_HIT;
+            self.registers.status &= !PpuStatus::VBLANK_STARTED;
+            self.registers.status &= !PpuStatus::SPRITE_OVERFLOW;
+        });
     }
 
     fn do_end_frame(&mut self) {
-        self.scanline = -1;
         self.frame += 1;
         self.flags.has_nmi = false;
         self.flags.odd = !self.flags.odd;
@@ -554,11 +583,9 @@ impl PPU {
     }
 
     fn do_tile_fetches_if_needed(&mut self) -> bool {
-        if self.is_blanking() {
-            return false;
-        }
+        assert_eq!((self.ppu_cycle - 1) % TILE_WIDTH_PX as i16, 0);
 
-        if ((self.ppu_cycle - 1) % TILE_WIDTH_PX as i16) != 0 {
+        if self.is_blanking() {
             return false;
         }
 
@@ -577,23 +604,132 @@ impl PPU {
         return true;
     }
 
-    // Returns the number of cycles until the next transition
-    // fn handle_transition(&mut self, new_state: PpuState) -> i16 {}
-
-    fn tick_once(&mut self) {
+    const fn look_up_state(scanline: i32, cycle: i32) -> PpuState {
         // https://www.nesdev.org/wiki/PPU_rendering
-        match (self.scanline, self.ppu_cycle) {
-            (-1, 1) => timer::timed!("ppu::clear flags", { self.do_start_frame() }),
-            (-1, 280) => {
-                if !self.is_blanking() {
-                    self.registers.addr.sync_y()
-                }
-            }
-            (-1, _) => timer::timed!("ppu::nop", { /* dummy scanline */ }),
+        match (scanline, cycle) {
+            (-1, 1) => PpuState::StartFrame,
+            (-1, 280) => PpuState::SyncY,
 
             // Visible scanlines (0-239)
-            (0..240, 0) => { /* idle cycle */ }
             (0..240, (1..256)) => {
+                if ((cycle - 1) % TILE_WIDTH_PX as i32) != 0 {
+                    PpuState::Idle
+                } else {
+                    PpuState::ActiveTileFetch
+                }
+            }
+
+            // Draw sprites once on the last visible cycle so they're over the background
+            (0..240, 256) => PpuState::Idle,
+            (0..240, 257) => PpuState::DrawAndEvalSprites,
+            (0..240, 321..337) => {
+                if ((cycle - 1) % TILE_WIDTH_PX as i32) != 0 {
+                    PpuState::Idle
+                } else {
+                    PpuState::BlankingTileFetch
+                }
+            }
+            (0..240, 337) => PpuState::StartHBlank,
+            (240, 1) => PpuState::IdleScanline,
+            (241, 1) => PpuState::StartVBlank,
+
+            (259, 340) => PpuState::EOF,
+            _ => PpuState::Idle,
+        }
+    }
+
+    fn create_transition_lut() -> TransitionLUT {
+        let mut transitions = [0_i32; std::mem::variant_count::<PpuState>()];
+        let mut prev_transition: (i32, i32) = (-1, 0);
+        let mut prev_state = PpuState::Idle;
+
+        for _ in 0..2 {
+            for scanline in -1..(SCANLINES_PER_FRAME as i32) {
+                for cycle in 0..(CYCLES_PER_SCANLINE as i32) {
+                    let state = Self::look_up_state(scanline, cycle);
+                    if state == PpuState::Idle {
+                        continue;
+                    }
+
+                    let transition_cycles = (scanline - prev_transition.0)
+                        * (CYCLES_PER_SCANLINE as i32)
+                        + (cycle - prev_transition.1);
+                    let entry = &mut transitions[prev_state as usize];
+                    assert!(
+                        *entry == 0 || *entry == transition_cycles,
+                        "{}:{} Overloaded transition {:?} -> {:?}, {} != {}",
+                        scanline,
+                        cycle,
+                        prev_state,
+                        state,
+                        *entry,
+                        transition_cycles,
+                    );
+
+                    *entry = transition_cycles;
+                    if *entry < 0 {
+                        *entry += (SCANLINES_PER_FRAME as i32) * CYCLES_PER_SCANLINE as i32;
+                    }
+
+                    prev_transition = (scanline, cycle);
+                    prev_state = state;
+                }
+            }
+        }
+
+        assert!(
+            transitions.iter().skip(1).all(|&e| e != 0),
+            "{:?}",
+            transitions
+        );
+        transitions
+    }
+
+    // Returns the number of cycles until the next transition
+    fn handle_transition(&mut self, cycles: i16) {
+        event!(
+            Level::DEBUG,
+            "[CYC:{}][SL:{}] transition from {:?} to state in {} cycles",
+            self.ppu_cycle,
+            self.scanline,
+            self.current_state,
+            cycles,
+        );
+
+        let mut next_cycle = self.ppu_cycle + cycles;
+        let mut next_scanline = self.scanline;
+        if next_cycle >= CYCLES_PER_SCANLINE as i16 {
+            next_scanline += next_cycle / CYCLES_PER_SCANLINE as i16;
+            next_cycle %= CYCLES_PER_SCANLINE as i16;
+
+            if next_scanline > LAST_SCANLINE as i16 {
+                next_scanline -= SCANLINES_PER_FRAME as i16;
+                assert_eq!(next_scanline, -1);
+            }
+        }
+        self.scanline = next_scanline;
+        self.ppu_cycle = next_cycle;
+
+        let state = Self::look_up_state(next_scanline as i32, next_cycle as i32);
+        event!(
+            Level::DEBUG,
+            "[CYC:{}][SL:{}] transition from {:?} -> {:?}",
+            next_cycle,
+            next_scanline,
+            self.current_state,
+            state,
+        );
+
+        match state {
+            PpuState::Idle => unreachable!(
+                "PPU transitioned from {:?} -> Idle, scanline={}, cycle={}",
+                self.current_state,
+                self.scanline,
+                self.ppu_cycle + cycles
+            ),
+            PpuState::StartFrame => self.do_start_frame(),
+            PpuState::SyncY => self.do_sync_y(),
+            PpuState::ActiveTileFetch => {
                 let fetched = self.do_tile_fetches_if_needed();
                 if fetched {
                     // Render one tile at a time. This is how frequently the real hardware is
@@ -601,68 +737,50 @@ impl PPU {
                     // every 8 cycles but write the pixels every cycle. Not sure if we actually
                     // need to do this to get a workable game.
                     timer::timed!("ppu::draw background", { self.draw_background() });
-                } else {
-                    timer::timed!("ppu::nop", {});
                 }
             }
-            // Draw sprites once on the last visible cycle so they're over the background
-            (0..240, 256) => timer::timed!("ppu::draw sprites", { self.draw_sprites() }),
-            (0..240, 257) => {
-                timer::timed!("ppu::evaluate sprites", {
-                    self.evaluate_sprites_next_scanline()
-                })
-            }
-            (0..240, 258..321) => timer::timed!("ppu::nop", { /* HW evaluating sprites */ }),
-            (0..240, 321..337) => {
+            PpuState::DrawAndEvalSprites => timer::timed!("ppu::sprites", {
+                self.draw_sprites();
+                self.evaluate_sprites_next_scanline();
+            }),
+            PpuState::BlankingTileFetch => {
                 self.do_tile_fetches_if_needed();
             }
-            (0..240, 337..342) => timer::timed!("ppu::nop", { /* garbage nametable fetches */ }),
+            PpuState::StartVBlank => self.do_start_vblank(),
+            PpuState::EOF => timer::timed!("ppu::EOF", { self.do_end_frame() }),
 
-            (240, _) => timer::timed!("ppu::nop", { /* idle scanline */ }),
-
-            (241, 1) => timer::timed!("ppu::vblank", { self.do_start_vblank() }),
-            (241..261, _) => {
-                timer::timed!("ppu::nop", { /* PPU should make no memory accesses */ })
-            }
-
-            (scanline, cycle) => unreachable!("scanline={}, cycle={}", scanline, cycle),
-        }
-
-        self.ppu_cycle += 1;
-
-        // End this scanline
-        if self.ppu_cycle >= CYCLES_PER_SCANLINE as i16 {
-            self.ppu_cycle -= CYCLES_PER_SCANLINE as i16;
-            self.scanline += 1;
-            if self.scanline > SCANLINES_PER_FRAME as i16 {
-                timer::timed!("ppu::EOF", {
-                    self.do_end_frame();
-                });
+            PpuState::StartHBlank | PpuState::IdleScanline => {
+                timer::timed!("ppu::nop", { /* no-op */ })
             }
         }
+
+        self.current_state = state;
     }
 
     #[tracing::instrument(target = "ppu", skip(self))]
     pub fn clock(&mut self, ticks: usize) {
         self.cycles_behind += ticks;
 
-        let total_cycles = self.total_ppu_cycles();
-
-        const VBLANK_START_SL: usize = 241;
+        const VBLANK_START_SL: usize = VISIBLE_SCANLINES + 1;
         const VBLANK_START: usize = VBLANK_START_SL * CYCLES_PER_SCANLINE + 1;
-        const VBLANK_END: usize = SCANLINES_PER_FRAME * CYCLES_PER_SCANLINE;
-
-        if total_cycles >= VBLANK_START {
+        if self.total_ppu_cycles() >= VBLANK_START {
             self.tick_n();
         }
     }
 
+    #[tracing::instrument(target = "ppu", skip(self))]
     fn tick_n(&mut self) {
-        for _ in 0..self.cycles_behind {
-            self.tick_once();
-        }
+        while self.cycles_behind != 0 {
+            let cycles = self.transition_lut[self.current_state as usize];
+            if self.cycles_behind < (cycles as usize) {
+                break;
+            }
 
-        self.cycles_behind = 0;
+            self.handle_transition(cycles as i16);
+
+            assert!(self.cycles_behind >= cycles);
+            self.cycles_behind -= cycles as usize;
+        }
     }
 
     fn bg_table_base(&self) -> u16 {
@@ -1050,8 +1168,10 @@ impl PPU {
 
         let frame_bytes: [u8; FRAME_SIZE_BYTES] = unsafe { std::mem::transmute(self.frame_buf) };
         self.needs_render = false;
-        self.renderer.draw_frame(&frame_bytes);
-        self.renderer.present();
+        timer::timed!("ppu::render frame", {
+            self.renderer.draw_frame(&frame_bytes);
+            self.renderer.present();
+        });
     }
 }
 
