@@ -118,7 +118,7 @@ enum PpuState {
 // A simple tripple-buffered frame buffer so the PPU can draw safely while offloading rendering to
 // another thread
 struct FrameBuffer {
-    buffers: [[u32; FRAME_SIZE]; 3],
+    buffers: Box<[[u32; FRAME_SIZE]; 2]>,
     index: usize,
 }
 
@@ -138,13 +138,13 @@ impl std::ops::IndexMut<usize> for FrameBuffer {
 impl FrameBuffer {
     fn new() -> Self {
         Self {
-            buffers: [[0_u32; FRAME_SIZE_BYTES / PX_SIZE_BYTES]; 3],
+            buffers: Box::new([[0_u32; FRAME_SIZE_BYTES / PX_SIZE_BYTES]; 2]),
             index: 0,
         }
     }
 
     fn swap(&mut self) {
-        self.index = (self.index + 1) % 3;
+        self.index = (self.index + 1) % self.buffers.len();
     }
 
     fn to_bytes(&self) -> &[u8; FRAME_SIZE_BYTES] {

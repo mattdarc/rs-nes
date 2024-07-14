@@ -228,7 +228,7 @@ impl<BusType: Bus> CPU<BusType> {
         );
 
         self.last_pc = self.state.pc;
-        let cycles = {
+        let cycles = timer::timed!("cpu", {
             let _enter = cpu_span.enter();
 
             if let Some(cycles) = self.interpreter.handle_nmi(&mut self.state) {
@@ -236,7 +236,7 @@ impl<BusType: Bus> CPU<BusType> {
             } else {
                 self.interpreter.interpret(&mut self.state)
             }
-        };
+        });
 
         self.interpreter.clock_bus(cycles as usize);
         self.exit_status.clone()

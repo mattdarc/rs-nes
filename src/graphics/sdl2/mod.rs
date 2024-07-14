@@ -134,8 +134,8 @@ impl SDLRenderer {
             height_px: height,
         };
 
-        // Use a bound of 1 so we can only have one frame being drawn at a time
-        let (sender, receiver) = mpsc::sync_channel(1);
+        // Use a bound of 0 so the PPU wwill have to wait until the previous frame is done drawing
+        let (sender, receiver) = mpsc::sync_channel(0);
         let render_thread = thread::spawn(move || loop {
             match receiver.recv().expect("Error receiving render requests") {
                 RenderRequest::Stop => return,
