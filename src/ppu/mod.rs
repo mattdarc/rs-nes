@@ -553,38 +553,6 @@ impl PPU {
         sprite.y() as i16 <= next_scanline && next_scanline < (sprite.y() + sprite_height) as i16
     }
 
-    fn update_vaddr(&mut self) {
-        let prev_addr = self.registers.addr.to_u16();
-        match self.ppu_cycle {
-            0 => { /* skipped */ }
-            8 | 16 | 24 | 32 | 40 | 48 | 56 | 64 | 72 | 80 | 88 | 96 | 104 | 112 | 120 | 128
-            | 136 | 144 | 152 | 160 | 168 | 176 | 184 | 192 | 200 | 208 | 216 | 224 | 232 | 240
-            | 248 | 328 | 336 => self.registers.addr.incr_x(),
-            256 => {
-                self.registers.addr.incr_y();
-                self.registers.addr.incr_x();
-            }
-            257 => self.registers.addr.sync_x(),
-            280..=304 => {
-                if self.scanline == -1 {
-                    self.registers.addr.sync_y();
-                }
-            }
-            _ => {}
-        }
-
-        if prev_addr != self.registers.addr.to_u16() {
-            event!(
-                Level::DEBUG,
-                "[CYC:{:<3}][SL:{:<3}] V({:#X}) ==> V({:#X})",
-                self.ppu_cycle,
-                self.scanline,
-                prev_addr,
-                self.registers.addr.to_u16(),
-            );
-        }
-    }
-
     fn do_tile_fetches_if_needed(&mut self) -> bool {
         if self.is_blanking() {
             return false;
@@ -605,6 +573,7 @@ impl PPU {
             self.do_pattern_fetch();
         });
 
+        self.registers.addr.incr_x();
         return true;
     }
 
@@ -615,6 +584,11 @@ impl PPU {
         // https://www.nesdev.org/wiki/PPU_rendering
         match (self.scanline, self.ppu_cycle) {
             (-1, 1) => timer::timed!("ppu::clear flags", { self.do_start_frame() }),
+            (-1, 280) => {
+                if !self.is_blanking() {
+                    self.registers.addr.sync_y()
+                }
+            }
             (-1, _) => timer::timed!("ppu::nop", { /* dummy scanline */ }),
 
             // Visible scanlines (0-239)
@@ -652,10 +626,6 @@ impl PPU {
             }
 
             (scanline, cycle) => unreachable!("scanline={}, cycle={}", scanline, cycle),
-        }
-
-        if !self.is_blanking() {
-            self.update_vaddr();
         }
 
         self.ppu_cycle += 1;
@@ -978,6 +948,10 @@ impl PPU {
             // Success: fouund a sprite we can actually update the count
             self.oam_secondary.commit();
         }
+
+        if !self.is_blanking() {
+            self.registers.addr.sync_x();
+        }
     }
 
     fn create_range(rev: bool, n: usize) -> impl Iterator<Item = usize> {
@@ -1047,6 +1021,11 @@ impl PPU {
             for (px, &lo) in px_idx.zip(color_idx.iter()).filter(|(_, &lo)| lo != 0) {
                 self.draw_pixel(base_addr, px, d4, d3_d2, lo);
             }
+        }
+
+        if !self.is_blanking() {
+            self.registers.addr.incr_y();
+            self.registers.addr.incr_x();
         }
     }
 

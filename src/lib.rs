@@ -1,6 +1,4 @@
 #![allow(dead_code)]
-#![feature(exclusive_range_pattern)]
-#![feature(hash_raw_entry)]
 
 extern crate sdl2;
 
