@@ -177,7 +177,7 @@ impl Bus for NesBus {
     }
 
     fn ppu_state(&self) -> (i16, i16) {
-        (self.ppu.scanline(), self.ppu.cycle())
+        (self.ppu.scanline() as i16, self.ppu.cycle() as i16)
     }
 
     fn pop_nmi(&mut self) -> Option<u8> {

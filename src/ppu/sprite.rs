@@ -26,12 +26,12 @@ impl Sprite {
         self.bytes != [0xFF; 4]
     }
 
-    pub fn x(&self) -> i16 {
-        self.bytes[3] as i16
+    pub fn x(&self) -> i32 {
+        self.bytes[3] as i32
     }
 
-    pub fn y(&self) -> i16 {
-        self.bytes[0] as i16
+    pub fn y(&self) -> i32 {
+        self.bytes[0] as i32
     }
 
     pub fn tile16(&self) -> (u16, u16) {

@@ -12,14 +12,13 @@ use sprite::{Sprite, SpriteRaw};
 use std::convert::TryFrom;
 use tracing::{event, Level};
 
-// FIXME: Need to fix up these types a bit
-const SCANLINES_PER_FRAME: usize = 262;
-const LAST_SCANLINE: usize = 260;
-const VISIBLE_SCANLINES: usize = 240;
-const CYCLES_PER_SCANLINE: usize = 341;
-const VISIBLE_CYCLES: usize = 258;
-const CYCLES_PER_TILE: usize = 8;
-const STARTUP_SCANLINES: usize = 30_000 / CYCLES_PER_SCANLINE;
+const SCANLINES_PER_FRAME: i32 = 262;
+const LAST_SCANLINE: i32 = 260;
+const VISIBLE_SCANLINES: i32 = 240;
+const CYCLES_PER_SCANLINE: i32 = 341;
+const VISIBLE_CYCLES: i32 = 258;
+const CYCLES_PER_TILE: i32 = 8;
+const STARTUP_SCANLINES: i32 = 30_000 / CYCLES_PER_SCANLINE;
 
 const TILE_HI_OFFSET_BYTES: u16 = 8;
 const TILE_STRIDE_SHIFT: u16 = 4;
@@ -136,9 +135,9 @@ pub struct PPU {
 
     // Number of cycles the NES has simulated outside of the PPU. The PPU may lag behind or skip
     // frames entirely if the result of the frame is neither human nor software visible
-    cycles_behind: usize,
-    ppu_cycle: i16,
-    scanline: i16,
+    cycles_behind: i32,
+    ppu_cycle: i32,
+    scanline: i32,
     frame: usize,
     current_state: PpuState,
     transition_lut: TransitionLUT,
@@ -225,12 +224,12 @@ impl PPU {
         }
     }
 
-    pub fn cycle(&self) -> i16 {
-        (self.total_ppu_cycles() % CYCLES_PER_SCANLINE) as i16
+    pub fn cycle(&self) -> i32 {
+        (self.total_ppu_cycles() % CYCLES_PER_SCANLINE) as i32
     }
 
-    pub fn scanline(&self) -> i16 {
-        (self.total_ppu_cycles() / CYCLES_PER_SCANLINE) as i16
+    pub fn scanline(&self) -> i32 {
+        (self.total_ppu_cycles() / CYCLES_PER_SCANLINE) as i32
     }
 
     pub fn register_read(&mut self, addr: u16) -> u8 {
@@ -327,7 +326,7 @@ impl PPU {
                 // rendering (but the address is still updated)
                 //
                 // https://www.nesdev.org/wiki/PPU_registers#OAMDATA
-                if self.scanline >= VISIBLE_SCANLINES as i16 {
+                if self.scanline >= VISIBLE_SCANLINES as i32 {
                     self.registers.oamdata = val;
                 }
                 self.registers.oamaddr = self.registers.oamaddr.wrapping_add(1);
@@ -439,10 +438,8 @@ impl PPU {
         (self.registers.mask & (PpuMask::SHOW_SPRITES | PpuMask::SHOW_BG)) != 0
     }
 
-    fn total_ppu_cycles(&self) -> usize {
-        (1 + self.scanline) as usize * CYCLES_PER_SCANLINE
-            + self.ppu_cycle as usize
-            + self.cycles_behind
+    fn total_ppu_cycles(&self) -> i32 {
+        (1 + self.scanline) * CYCLES_PER_SCANLINE + self.ppu_cycle + self.cycles_behind
     }
 
     fn do_start_vblank(&mut self) {
@@ -494,7 +491,7 @@ impl PPU {
         // SW can set forced-blank mode, which disables all rendering and updates. This is used
         // typically during initialization
         let forced_blank = !self.rendering_enabled();
-        let in_vblank = self.scanline > VISIBLE_SCANLINES as i16;
+        let in_vblank = self.scanline > VISIBLE_SCANLINES as i32;
         forced_blank || in_vblank
     }
 
@@ -569,7 +566,7 @@ impl PPU {
     pub fn sprite_hit_next_scanline(&self, sprite: &Sprite) -> bool {
         // NOTE: sprites on the first scanline are never rendered
         let next_scanline = self.scanline + 1;
-        if next_scanline == VISIBLE_SCANLINES as i16 {
+        if next_scanline == VISIBLE_SCANLINES {
             return false;
         }
 
@@ -579,11 +576,11 @@ impl PPU {
             8
         };
 
-        sprite.y() as i16 <= next_scanline && next_scanline < (sprite.y() + sprite_height) as i16
+        sprite.y() <= next_scanline && next_scanline < (sprite.y() + sprite_height)
     }
 
     fn do_tile_fetches_if_needed(&mut self) -> bool {
-        assert_eq!((self.ppu_cycle - 1) % TILE_WIDTH_PX as i16, 0);
+        assert_eq!((self.ppu_cycle - 1) % TILE_WIDTH_PX as i32, 0);
 
         if self.is_blanking() {
             return false;
@@ -686,7 +683,7 @@ impl PPU {
     }
 
     // Returns the number of cycles until the next transition
-    fn handle_transition(&mut self, cycles: i16) {
+    fn handle_transition(&mut self, cycles: i32) {
         event!(
             Level::DEBUG,
             "[CYC:{}][SL:{}] transition from {:?} to state in {} cycles",
@@ -698,19 +695,19 @@ impl PPU {
 
         let mut next_cycle = self.ppu_cycle + cycles;
         let mut next_scanline = self.scanline;
-        if next_cycle >= CYCLES_PER_SCANLINE as i16 {
-            next_scanline += next_cycle / CYCLES_PER_SCANLINE as i16;
-            next_cycle %= CYCLES_PER_SCANLINE as i16;
+        if next_cycle >= CYCLES_PER_SCANLINE {
+            next_scanline += next_cycle / CYCLES_PER_SCANLINE;
+            next_cycle %= CYCLES_PER_SCANLINE;
 
-            if next_scanline > LAST_SCANLINE as i16 {
-                next_scanline -= SCANLINES_PER_FRAME as i16;
+            if next_scanline > LAST_SCANLINE {
+                next_scanline -= SCANLINES_PER_FRAME;
                 assert_eq!(next_scanline, -1);
             }
         }
         self.scanline = next_scanline;
         self.ppu_cycle = next_cycle;
 
-        let state = Self::look_up_state(next_scanline as i32, next_cycle as i32);
+        let state = Self::look_up_state(next_scanline, next_cycle);
         event!(
             Level::DEBUG,
             "[CYC:{}][SL:{}] transition from {:?} -> {:?}",
@@ -759,10 +756,10 @@ impl PPU {
 
     #[tracing::instrument(target = "ppu", skip(self))]
     pub fn clock(&mut self, ticks: usize) {
-        self.cycles_behind += ticks;
+        self.cycles_behind += ticks as i32;
 
-        const VBLANK_START_SL: usize = VISIBLE_SCANLINES + 1;
-        const VBLANK_START: usize = VBLANK_START_SL * CYCLES_PER_SCANLINE + 1;
+        const VBLANK_START_SL: i32 = VISIBLE_SCANLINES + 1;
+        const VBLANK_START: i32 = VBLANK_START_SL * CYCLES_PER_SCANLINE + 1;
         if self.total_ppu_cycles() >= VBLANK_START {
             self.tick_n();
         }
@@ -770,16 +767,17 @@ impl PPU {
 
     #[tracing::instrument(target = "ppu", skip(self))]
     fn tick_n(&mut self) {
+        assert!(self.cycles_behind >= 0);
         while self.cycles_behind != 0 {
             let cycles = self.transition_lut[self.current_state as usize];
-            if self.cycles_behind < (cycles as usize) {
+            if self.cycles_behind < cycles {
                 break;
             }
 
-            self.handle_transition(cycles as i16);
+            self.handle_transition(cycles);
 
             assert!(self.cycles_behind >= cycles);
-            self.cycles_behind -= cycles as usize;
+            self.cycles_behind -= cycles;
         }
     }
 
@@ -829,9 +827,7 @@ impl PPU {
     }
 
     fn is_visible_cycle(&self) -> bool {
-        0 <= self.scanline
-            && self.scanline < VISIBLE_SCANLINES as i16
-            && self.ppu_cycle < VISIBLE_CYCLES as i16
+        0 <= self.scanline && self.scanline < VISIBLE_SCANLINES && self.ppu_cycle < VISIBLE_CYCLES
     }
 
     /// Compute the rendering base address into the buffer to render at the current scanline at the
